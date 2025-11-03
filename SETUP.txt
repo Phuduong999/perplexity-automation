@@ -1,0 +1,66 @@
+✅ ĐÃ BUILD SẴN - CHỈ CẦN LOAD VÀ XEM!
+
+CÁCH SỬ DỤNG:
+1. Chrome -> chrome://extensions/
+2. Bật "Developer mode" (góc trên phải)
+3. Click "Load unpacked" -> Chọn folder "dist"
+4. Click icon extension trên toolbar
+5. Click "Open Perplexity" -> Click "Analyze DOM"
+6. Xem DOM được tô màu trên trang Perplexity
+7. Xem kết quả trong popup và console (F12)
+
+WORKFLOW HIỆN TẠI (HOÀN TOÀN TỰ ĐỘNG):
+📝 Bước 1: Tìm Input & Submit Button
+🔘 Bước 2: GỬI PROMPT vào Input
+   - Prompt mặc định: "Generate a random number between 1 and 100. Output only the number in a code block with no explanation."
+🖱️ Bước 3: NHẤN Submit Button
+⏳ Bước 4: ĐỢI AI suy nghĩ xong
+   - Check button state mỗi 500ms
+   - Đợi button: THINKING (disabled) → READY (enabled)
+   - Timeout: 60 giây
+📊 Bước 5: SCAN & EXTRACT Code Blocks
+   - Tìm #markdown-content-{0..10}
+   - Extract value từ <code> tag
+   - Ví dụ: Lấy số "33"
+
+LƯU Ý:
+✅ Extension TỰ ĐỘNG gửi prompt
+✅ Extension TỰ ĐỘNG nhấn submit
+✅ Extension TỰ ĐỘNG đợi AI xong
+✅ Extension TỰ ĐỘNG lấy kết quả
+❌ KHÔNG CẦN thao tác thủ công gì cả!
+
+CÁCH SỬ DỤNG:
+1. Load extension
+2. Mở Perplexity
+3. Click "Analyze DOM" trong popup
+4. Ngồi xem extension tự động làm hết!
+
+TÍNH NĂNG:
+✅ Chỉ tô màu Input & Submit Button (không tô gì khác)
+✅ Phát hiện trạng thái button linh hoạt (READY/THINKING)
+✅ UI workflow process hiển thị từng bước
+✅ Lưu trạng thái khi đóng popup (không reset)
+✅ Chạy ngầm khi đóng extension
+✅ Animation đẹp cho progress
+✅ Auto build sẵn trong folder "dist"
+
+MÀU SẮC TÔ HIGHLIGHT:
+🔵 #4ECDC4 - Input element (#ask-input)
+🟢 #28A745 - Submit button READY (không disabled)
+🟡 #FFC107 - Submit button THINKING (disabled)
+🟣 #9B59B6 - Markdown container (#markdown-content-X)
+🔴 #E74C3C - Code block bên trong
+
+SELECTORS ĐƯỢC DÙNG:
+- Input: #ask-input (ID cố định)
+- Button: Thử nhiều selectors linh hoạt:
+  • button[data-testid="submit-button"]
+  • button[aria-label="Submit"]
+  • button[aria-label="Voice mode"]
+  • button[type="button"]:has(svg[role="img"])
+
+NẾU CẦN BUILD LẠI:
+npm install
+npm run build
+
