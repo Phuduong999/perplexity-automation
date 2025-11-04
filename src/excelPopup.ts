@@ -50,7 +50,7 @@ let rowsProcessedInCurrentThread = 0; // Track rows in current Perplexity thread
 let markdownCounter = 0; // Global markdown counter (only reset when creating new thread)
 
 // TEST MODE: Set to 5 rows for quick testing, change to 50 for production
-const TEST_MODE = false;
+const TEST_MODE = true;
 const ROWS_PER_THREAD = TEST_MODE ? 5 : 50; // Create new thread every 5 rows (test) or 50 rows (production)
 
 /**
@@ -234,6 +234,8 @@ async function loadPartFile(partNumber: number): Promise<void> {
     currentRowIndex = 0;
     promptSent = false;
     rowsProcessedInCurrentThread = 0; // Reset counter for new file
+    addLog(`🔄 Counters reset for new file: currentRowIndex=0, rowsProcessedInCurrentThread=0, promptSent=false`);
+    addLog(`📌 Note: markdownCounter will be reset when sending initial prompt`);
 
     // Update UI
     elements.fileList.innerHTML = `<strong>Current file:</strong><br>📄 Part${partNumber}.xlsx<br>REVIEW: ${reviewRowsCount} | OK: ${okRowsCount}`;
@@ -473,7 +475,7 @@ async function waitForMarkdown(index: number, maxWait: number = 60000): Promise<
       // Reset markdown counter only (keep rowsProcessedInCurrentThread)
       const oldMarkdownCounter = markdownCounter;
       markdownCounter = 0;
-      addLog(`🔄 Markdown counter reset: ${oldMarkdownCounter} → 0`);
+      addLog(`🔄 Markdown counter reset: ${oldMarkdownCounter} → 0 (rowsProcessedInCurrentThread=${rowsProcessedInCurrentThread} kept)`);
 
       // Send initial prompt again
       addLog('📤 Sending initial prompt to new thread...');
@@ -484,12 +486,12 @@ async function waitForMarkdown(index: number, maxWait: number = 60000): Promise<
           payload: { prompt: firstManager['promptContent'] }
         });
         await sleep(10000);
-        addLog('✅ Initial prompt sent to new thread');
+        addLog('✅ Initial prompt sent to new thread (will be markdown-0, skipped)');
       }
 
-      // Retry with markdown-1 (since we reset counter)
+      // Retry with markdown-1 (since we reset counter and sent initial prompt)
       markdownCounter = 1;
-      addLog(`🔄 Retrying with markdown-content-1...`);
+      addLog(`🔄 Now retrying with markdown-content-1 (after new thread workflow)...`);
 
       const retryStartTime = Date.now();
       while (Date.now() - retryStartTime < maxWait) {
@@ -500,7 +502,7 @@ async function waitForMarkdown(index: number, maxWait: number = 60000): Promise<
           });
 
           if (retryResponse.success && retryResponse.content) {
-            addLog('✅ Markdown found after new thread');
+            addLog('✅ Markdown-content-1 found after new thread workflow');
             return retryResponse.content;
           }
         } catch (error) {
@@ -544,10 +546,10 @@ async function processRow(row: any, iteration: number): Promise<void> {
   markdownCounter++;
 
   // Wait for markdown content using global counter
-  addLog(`Waiting for markdown-content-${markdownCounter}...`);
+  addLog(`🔍 Waiting for markdown-content-${markdownCounter} (rowsProcessedInCurrentThread=${rowsProcessedInCurrentThread})...`);
   const content = await waitForMarkdown(markdownCounter);
-  
-  addLog(`✅ Received response (${content.length} chars)`);
+
+  addLog(`✅ Received response from markdown-content-${markdownCounter} (${content.length} chars)`);
 
   // Parse response
   const tags = manager.parseAIResponse(content);
@@ -650,6 +652,8 @@ elements.startBtn.addEventListener('click', async () => {
 
       // Reset markdown counter for new session
       markdownCounter = 0;
+      addLog(`🔄 Markdown counter initialized: ${markdownCounter}`);
+      addLog(`📊 rowsProcessedInCurrentThread: ${rowsProcessedInCurrentThread}`);
 
       // Get first manager to load prompt
       const firstManager = Array.from(workflowManagers.values())[0];
@@ -665,9 +669,9 @@ elements.startBtn.addEventListener('click', async () => {
         payload: { prompt: firstManager['promptContent'] }
       });
 
-      addLog('⏳ Waiting for AI to process prompt...');
+      addLog('⏳ Waiting for AI to process initial prompt...');
       await sleep(10000); // Wait longer for first prompt
-      addLog('✅ Initial prompt sent (markdown-0 will be skipped)', 'success');
+      addLog('✅ Initial prompt sent (will be markdown-0, skipped in workflow)', 'success');
       promptSent = true;
       await saveState(); // Save after sending prompt
     }
@@ -691,9 +695,10 @@ elements.startBtn.addEventListener('click', async () => {
 
         // Check if need to refresh conversation (every X rows)
         if (rowsProcessedInCurrentThread >= ROWS_PER_THREAD && i < reviewRows.length - 1) {
-          addLog(`\n🔄 ========== NEW THREAD TRIGGERED ==========`, 'warning');
-          addLog(`📊 Processed ${rowsProcessedInCurrentThread} rows in current thread`, 'warning');
+          addLog(`\n🔄 ========== NEW THREAD TRIGGERED (SCHEDULED) ==========`, 'warning');
+          addLog(`📊 Processed ${rowsProcessedInCurrentThread} rows in current thread (limit: ${ROWS_PER_THREAD})`, 'warning');
           addLog(`📊 Markdown counter before reset: ${markdownCounter}`, 'warning');
+          addLog(`📊 Current row index: ${i} / ${reviewRows.length - 1}`, 'warning');
           addLog(`🔄 Creating new thread...`, 'warning');
 
           // Click "New Thread" button
@@ -703,14 +708,15 @@ elements.startBtn.addEventListener('click', async () => {
             });
 
             if (response && response.success) {
-              addLog('✅ New thread created');
+              addLog('✅ New thread created successfully');
 
-              // Reset workflow state (NEW THREAD = RESET MARKDOWN COUNTER)
+              // Reset workflow state (NEW THREAD = RESET MARKDOWN COUNTER + ROWS COUNTER)
               addLog('🔄 Resetting workflow state for new thread...');
               promptSent = false;
               rowsProcessedInCurrentThread = 0;
               markdownCounter = 0; // Reset markdown counter for new thread
               addLog(`✅ Counters reset: rowsProcessedInCurrentThread=0, markdownCounter=0`);
+              addLog(`📌 Note: Excel row counter (i=${i}) continues - NOT reset`);
 
               // Send initial prompt again
               addLog('📤 Sending initial prompt to new thread...');
@@ -722,7 +728,7 @@ elements.startBtn.addEventListener('click', async () => {
                 });
                 await sleep(10000);
                 promptSent = true;
-                addLog('✅ Initial prompt sent to new thread');
+                addLog('✅ Initial prompt sent to new thread (will be markdown-0, skipped)');
               }
 
               addLog('🔄 ========== NEW THREAD COMPLETE ==========', 'success');
