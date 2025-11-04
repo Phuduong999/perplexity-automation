@@ -489,28 +489,14 @@ async function waitForMarkdown(index: number, maxWait: number = 60000): Promise<
         addLog('✅ Initial prompt sent to new thread (will be markdown-0, skipped)');
       }
 
-      // Retry with markdown-1 (since we reset counter and sent initial prompt)
-      markdownCounter = 1;
-      addLog(`🔄 Now retrying with markdown-content-1 (after new thread workflow)...`);
+      // Now we need to re-send the CURRENT ROW's prompt (not retry markdown-1)
+      // Because markdown-1 doesn't exist yet - it will be created by the current row
+      addLog(`🔄 Re-sending current row prompt to new thread...`);
 
-      const retryStartTime = Date.now();
-      while (Date.now() - retryStartTime < maxWait) {
-        try {
-          const retryResponse = await sendToContentScript({
-            type: 'GET_MARKDOWN',
-            payload: { index: 1 }
-          });
-
-          if (retryResponse.success && retryResponse.content) {
-            addLog('✅ Markdown-content-1 found after new thread workflow');
-            return retryResponse.content;
-          }
-        } catch (error) {
-          // Continue waiting
-        }
-
-        await sleep(2000);
-      }
+      // The caller (processRow) will handle re-sending the prompt
+      // We just need to signal that we're ready for a new request
+      // Return empty to trigger re-send in processRow
+      throw new Error('NEW_THREAD_CREATED_RETRY_NEEDED');
     }
   } catch (error) {
     addLog(`❌ Error creating new thread: ${error}`, 'error');
@@ -532,13 +518,13 @@ async function processRow(row: any, iteration: number): Promise<void> {
   // Format input
   const input = manager.formatInput(row);
   addLog(`Input: ${input}`);
-  
+
   // Send to AI
   await sendToContentScript({
     type: MessageType.START_WORKFLOW,
     payload: { prompt: input }
   });
-  
+
   addLog('⏳ Waiting for AI response...');
   await sleep(5000); // Wait for AI to start processing
 
@@ -547,7 +533,35 @@ async function processRow(row: any, iteration: number): Promise<void> {
 
   // Wait for markdown content using global counter
   addLog(`🔍 Waiting for markdown-content-${markdownCounter} (rowsProcessedInCurrentThread=${rowsProcessedInCurrentThread})...`);
-  const content = await waitForMarkdown(markdownCounter);
+
+  let content: string;
+  try {
+    content = await waitForMarkdown(markdownCounter);
+  } catch (error) {
+    // Check if new thread was created and we need to retry
+    if (error instanceof Error && error.message === 'NEW_THREAD_CREATED_RETRY_NEEDED') {
+      addLog('🔄 New thread created, re-sending prompt for current row...');
+
+      // Re-send prompt to new thread
+      await sendToContentScript({
+        type: MessageType.START_WORKFLOW,
+        payload: { prompt: input }
+      });
+
+      addLog('⏳ Waiting for AI response in new thread...');
+      await sleep(5000);
+
+      // Increment counter again for the retry
+      markdownCounter++;
+      addLog(`🔍 Waiting for markdown-content-${markdownCounter} (retry after new thread)...`);
+
+      // Wait for markdown again
+      content = await waitForMarkdown(markdownCounter);
+    } else {
+      // Other error, re-throw
+      throw error;
+    }
+  }
 
   addLog(`✅ Received response from markdown-content-${markdownCounter} (${content.length} chars)`);
 
