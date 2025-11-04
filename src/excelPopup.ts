@@ -50,7 +50,7 @@ let rowsProcessedInCurrentThread = 0; // Track rows in current Perplexity thread
 let markdownCounter = 0; // Global markdown counter (only reset when creating new thread)
 
 // TEST MODE: Set to 5 rows for quick testing, change to 50 for production
-const TEST_MODE = true;
+const TEST_MODE = false;
 const ROWS_PER_THREAD = TEST_MODE ? 5 : 50; // Create new thread every 5 rows (test) or 50 rows (production)
 
 /**
