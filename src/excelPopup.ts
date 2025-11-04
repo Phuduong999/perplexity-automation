@@ -435,28 +435,86 @@ async function sendToContentScript(message: any, retries: number = 3): Promise<a
 
 /**
  * Wait for markdown content
+ * If not found after maxWait, trigger new thread and retry
  */
 async function waitForMarkdown(index: number, maxWait: number = 60000): Promise<string> {
   const startTime = Date.now();
-  
+
   while (Date.now() - startTime < maxWait) {
     try {
       const response = await sendToContentScript({
         type: 'GET_MARKDOWN',
         payload: { index }
       });
-      
+
       if (response.success && response.content) {
         return response.content;
       }
     } catch (error) {
       // Continue waiting
     }
-    
+
     await sleep(2000);
   }
-  
-  throw new Error(`Timeout waiting for markdown-content-${index}`);
+
+  // Timeout - markdown not found, trigger new thread
+  addLog(`⚠️ Markdown-content-${index} not found after ${maxWait/1000}s`, 'warning');
+  addLog('🔄 Triggering new thread due to missing markdown...', 'warning');
+
+  // Create new thread
+  try {
+    const response = await sendToContentScript({
+      type: MessageType.NEW_THREAD
+    });
+
+    if (response && response.success) {
+      addLog('✅ New thread created due to missing markdown');
+
+      // Reset markdown counter only (keep rowsProcessedInCurrentThread)
+      const oldMarkdownCounter = markdownCounter;
+      markdownCounter = 0;
+      addLog(`🔄 Markdown counter reset: ${oldMarkdownCounter} → 0`);
+
+      // Send initial prompt again
+      addLog('📤 Sending initial prompt to new thread...');
+      const firstManager = Array.from(workflowManagers.values())[0];
+      if (firstManager) {
+        await sendToContentScript({
+          type: MessageType.START_WORKFLOW,
+          payload: { prompt: firstManager['promptContent'] }
+        });
+        await sleep(10000);
+        addLog('✅ Initial prompt sent to new thread');
+      }
+
+      // Retry with markdown-1 (since we reset counter)
+      markdownCounter = 1;
+      addLog(`🔄 Retrying with markdown-content-1...`);
+
+      const retryStartTime = Date.now();
+      while (Date.now() - retryStartTime < maxWait) {
+        try {
+          const retryResponse = await sendToContentScript({
+            type: 'GET_MARKDOWN',
+            payload: { index: 1 }
+          });
+
+          if (retryResponse.success && retryResponse.content) {
+            addLog('✅ Markdown found after new thread');
+            return retryResponse.content;
+          }
+        } catch (error) {
+          // Continue waiting
+        }
+
+        await sleep(2000);
+      }
+    }
+  } catch (error) {
+    addLog(`❌ Error creating new thread: ${error}`, 'error');
+  }
+
+  throw new Error(`Timeout waiting for markdown-content-${index} even after new thread`);
 }
 
 /**
