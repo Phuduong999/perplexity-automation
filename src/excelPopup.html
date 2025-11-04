@@ -78,14 +78,32 @@
         </div>
       </section>
 
-      <!-- File Input Section -->
+      <!-- Part Selection Section -->
       <section class="file-input-section">
-        <label for="excelFile">Select Excel Files (Part 1-12):</label>
-        <input type="file" id="excelFile" accept=".xlsx,.xls" multiple />
+        <label for="partSelector">Select Part to Process:</label>
+        <select id="partSelector" style="width: 100%; padding: 10px; border: 2px solid #ccc; border-radius: 4px; font-size: 14px;">
+          <option value="1">Part 1 - Food Exclusion Tag_RootFile_Part1.xlsx</option>
+          <option value="2" selected>Part 2 - Food Exclusion Tag_RootFile_Part2.xlsx</option>
+          <option value="3">Part 3 - Food Exclusion Tag_RootFile_Part3.xlsx</option>
+          <option value="4">Part 4 - Food Exclusion Tag_RootFile_Part4.xlsx</option>
+          <option value="5">Part 5 - Food Exclusion Tag_RootFile_Part5.xlsx</option>
+          <option value="6">Part 6 - Food Exclusion Tag_RootFile_Part6.xlsx</option>
+          <option value="7">Part 7 - Food Exclusion Tag_RootFile_Part7.xlsx</option>
+          <option value="8">Part 8 - Food Exclusion Tag_RootFile_Part8.xlsx</option>
+          <option value="9">Part 9 - Food Exclusion Tag_RootFile_Part9.xlsx</option>
+          <option value="10">Part 10 - Food Exclusion Tag_RootFile_Part10.xlsx</option>
+          <option value="11">Part 11 - Food Exclusion Tag_RootFile_Part11.xlsx</option>
+          <option value="12">Part 12 - Food Exclusion Tag_RootFile_Part12.xlsx</option>
+        </select>
         <p style="font-size: 12px; color: #666; margin-top: 8px;">
-          📁 Tip: Hold Ctrl/Cmd to select multiple files
+          🎯 Select which part you want to process. Extension will auto-continue from this part onwards.
         </p>
-        <div id="fileList" style="margin-top: 10px; font-size: 12px;"></div>
+        <div style="margin-top: 10px;">
+          <label>
+            <input type="checkbox" id="singlePartMode" style="margin-right: 8px;">
+            Process only selected part (don't auto-continue to next parts)
+          </label>
+        </div>
       </section>
 
       <!-- Stats Section -->
@@ -122,7 +140,7 @@
         <button id="openTabBtn" class="btn btn-secondary">
           📂 Open Perplexity
         </button>
-        <button id="startBtn" class="btn btn-primary" disabled>
+        <button id="startBtn" class="btn btn-primary">
           🚀 Start Processing
         </button>
         <button id="stopBtn" class="btn btn-danger" style="display: none;">

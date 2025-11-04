@@ -6,6 +6,8 @@ import { ExcelWorkflowManager } from './excelWorkflow';
  */
 const elements = {
   excelFile: document.getElementById('excelFile') as HTMLInputElement,
+  partSelector: document.getElementById('partSelector') as HTMLSelectElement,
+  singlePartMode: document.getElementById('singlePartMode') as HTMLInputElement,
   fileList: document.getElementById('fileList') as HTMLElement,
   openTabBtn: document.getElementById('openTabBtn') as HTMLButtonElement,
   startBtn: document.getElementById('startBtn') as HTMLButtonElement,
@@ -45,7 +47,7 @@ let selectedFiles: string[] = []; // File names
  */
 const PARTS_FOLDER = 'IngredientName/';
 const TOTAL_PARTS = 12;
-let currentPartIndex = 0; // Track which part we're processing (0-11)
+let currentPartIndex = 1; // Track which part we're processing (will be set from UI selector)
 let rowsProcessedInCurrentThread = 0; // Track rows in current Perplexity thread
 let markdownCounter = 0; // Global markdown counter (only reset when creating new thread)
 
@@ -589,6 +591,11 @@ async function processRow(row: any, iteration: number): Promise<void> {
  * Start processing
  */
 elements.startBtn.addEventListener('click', async () => {
+  // Update currentPartIndex from selector before starting
+  currentPartIndex = parseInt(elements.partSelector.value);
+  addLog(`=== 🚀 STARTING WORKFLOW ===`, 'success');
+  addLog(`📋 Processing Part ${currentPartIndex} (Single part mode: ${elements.singlePartMode.checked})`, 'info');
+
   if (reviewRows.length === 0) {
     addLog('❌ No data to process', 'error');
     return;
@@ -786,24 +793,31 @@ elements.startBtn.addEventListener('click', async () => {
       // Auto download current file
       await autoDownloadFiles();
 
-      // Check if there are more parts to process
-      currentPartIndex++;
-      if (currentPartIndex < TOTAL_PARTS) {
-        addLog(`\n🔄 Loading next part (${currentPartIndex + 1}/${TOTAL_PARTS})...`);
+      // Check if we should continue to next parts (only if not in single part mode)
+      const singlePartMode = elements.singlePartMode.checked;
 
-        // Clear current file data
-        workflowManagers.clear();
-        excelBuffers.clear();
+      if (!singlePartMode) {
+        currentPartIndex++;
+        if (currentPartIndex <= TOTAL_PARTS) {
+          addLog(`\n🔄 Loading next part (${currentPartIndex}/${TOTAL_PARTS})...`);
 
-        // Load next part
-        await loadPartFile(currentPartIndex + 1);
+          // Clear current file data
+          workflowManagers.clear();
+          excelBuffers.clear();
 
-        // Restart processing
-        addLog('🔄 Restarting workflow for next part...');
-        elements.startBtn.click();
+          // Load next part
+          await loadPartFile(currentPartIndex);
+
+          // Restart processing
+          addLog('🔄 Restarting workflow for next part...');
+          elements.startBtn.click();
+        } else {
+          addLog('\n🎉 ALL PARTS COMPLETED!', 'success');
+          updateStatus('All parts complete', 'success');
+        }
       } else {
-        addLog('\n🎉 ALL PARTS COMPLETED!', 'success');
-        updateStatus('All parts complete', 'success');
+        addLog('\n✅ SELECTED PART COMPLETED! (Single part mode)', 'success');
+        updateStatus('Selected part complete', 'success');
       }
     }
     
@@ -885,21 +899,30 @@ if (TEST_MODE) {
 } else {
   addLog('Excel Tag Automation - Production Mode');
 }
-addLog('🚀 Auto-loading Part1.xlsx...');
-updateStatus('Loading Part1...', 'loading');
+// Initialize with selected part from UI
+function initializeWithSelectedPart() {
+  const selectedPart = parseInt(elements.partSelector.value);
+  currentPartIndex = selectedPart;
 
-// Auto-load Part1 on startup and auto-start processing
-loadPartFile(1).then(() => {
-  addLog('✅ Part1 loaded - Auto-starting in 3 seconds...', 'success');
-  updateStatus('Part1 loaded - Auto-starting...', 'ready');
+  addLog(`🚀 Loading Part${selectedPart}.xlsx...`);
+  updateStatus(`Loading Part${selectedPart}...`, 'loading');
 
-  // Auto-start after 3 seconds
-  setTimeout(() => {
-    addLog('🚀 Auto-starting workflow...', 'success');
-    elements.startBtn.click();
-  }, 3000);
-}).catch((error) => {
-  addLog(`❌ Failed to load Part1: ${error}`, 'error');
-  updateStatus('Error loading Part1', 'error');
+  loadPartFile(selectedPart).then(() => {
+    addLog(`✅ Part${selectedPart} loaded - Ready to start!`, 'success');
+    updateStatus(`Part${selectedPart} loaded - Ready`, 'ready');
+  }).catch((error) => {
+    addLog(`❌ Failed to load Part${selectedPart}: ${error}`, 'error');
+    updateStatus(`Error loading Part${selectedPart}`, 'error');
+  });
+}
+
+// Listen for part selector changes
+elements.partSelector.addEventListener('change', () => {
+  if (!isProcessing) {
+    initializeWithSelectedPart();
+  }
 });
+
+// Initialize on startup
+initializeWithSelectedPart();
 
