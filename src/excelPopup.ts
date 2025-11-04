@@ -5,10 +5,8 @@ import { ExcelWorkflowManager } from './excelWorkflow';
  * DOM Elements
  */
 const elements = {
-  excelFile: document.getElementById('excelFile') as HTMLInputElement,
   partSelector: document.getElementById('partSelector') as HTMLSelectElement,
   singlePartMode: document.getElementById('singlePartMode') as HTMLInputElement,
-  fileList: document.getElementById('fileList') as HTMLElement,
   openTabBtn: document.getElementById('openTabBtn') as HTMLButtonElement,
   startBtn: document.getElementById('startBtn') as HTMLButtonElement,
   stopBtn: document.getElementById('stopBtn') as HTMLButtonElement,
@@ -33,7 +31,6 @@ const elements = {
  */
 let workflowManagers: Map<string, ExcelWorkflowManager> = new Map();
 let excelBuffers: Map<string, ArrayBuffer> = new Map();
-let allReviewRows: any[] = []; // Combined rows from all files
 let reviewRows: any[] = [];
 let currentRowIndex: number = 0;
 let isProcessing: boolean = false;
@@ -115,8 +112,9 @@ async function loadState(): Promise<void> {
       addLog(`📂 Found previous session: ${selectedFiles.length} file(s), ${currentRowIndex}/${totalRows} rows processed`, 'info');
       addLog(`⚠️ Please re-select files to continue`, 'warning');
 
-      // Show file list
-      elements.fileList.innerHTML = `<strong>Previous files:</strong><br>${selectedFiles.map(f => `📄 ${f}`).join('<br>')}<br><br><em>Re-select files to continue</em>`;
+      // Show file list - replaced with log since fileList element doesn't exist
+      addLog(`📂 Previous files: ${selectedFiles.map(f => `📄 ${f}`).join(', ')}`);
+      addLog(`📝 Re-select files to continue`);
     }
 
     console.log('📂 State loaded from storage');
@@ -239,8 +237,8 @@ async function loadPartFile(partNumber: number): Promise<void> {
     addLog(`🔄 Counters reset for new file: currentRowIndex=0, rowsProcessedInCurrentThread=0, promptSent=false`);
     addLog(`📌 Note: markdownCounter will be reset when sending initial prompt`);
 
-    // Update UI
-    elements.fileList.innerHTML = `<strong>Current file:</strong><br>📄 Part${partNumber}.xlsx<br>REVIEW: ${reviewRowsCount} | OK: ${okRowsCount}`;
+    // Update UI - replaced fileList with log since element doesn't exist
+    addLog(`📂 Current file: Part${partNumber}.xlsx - REVIEW: ${reviewRowsCount} | OK: ${okRowsCount}`);
     elements.statsSection.style.display = 'block';
     updateStats();
     elements.startBtn.disabled = false;
@@ -253,12 +251,14 @@ async function loadPartFile(partNumber: number): Promise<void> {
 
 /**
  * Handle file selection (DISABLED - Auto-load mode)
+ * Note: This event listener is commented out since excelFile element doesn't exist
  */
-elements.excelFile.addEventListener('change', async (event) => {
-  addLog('⚠️ Manual file selection disabled - Using auto-load mode', 'warning');
-  return;
+// elements.excelFile.addEventListener('change', async (event) => {
+//   addLog('⚠️ Manual file selection disabled - Using auto-load mode', 'warning');
+//   return;
 
-  // OLD CODE (disabled)
+  // OLD CODE (disabled) - commented out since excelFile element doesn't exist
+  /*
   const files = (event.target as HTMLInputElement).files;
   // @ts-ignore - disabled code
   if (!files || files.length === 0) return;
@@ -330,8 +330,8 @@ elements.excelFile.addEventListener('change', async (event) => {
 
     addLog(`\n📊 Total: ${totalRows} REVIEW rows from ${filesProcessed} file(s)`, 'success');
 
-    // Show file list
-    elements.fileList.innerHTML = `<strong>Selected files:</strong><br>${selectedFiles.map(f => `📄 ${f}`).join('<br>')}`;
+    // Show file list - replaced with log since fileList element doesn't exist
+    addLog(`📂 Selected files: ${selectedFiles.map(f => f).join(', ')}`);
 
     // Show stats
     elements.statsSection.style.display = 'block';
@@ -340,12 +340,13 @@ elements.excelFile.addEventListener('change', async (event) => {
     // Enable start button
     elements.startBtn.disabled = false;
     updateStatus(`${filesProcessed} file(s) loaded - Ready to process`, 'ready');
-    
+
   } catch (error) {
     addLog(`❌ Error: ${error}`, 'error');
     updateStatus('Error loading file', 'error');
   }
-});
+  */
+// });
 
 /**
  * Open Perplexity tab
