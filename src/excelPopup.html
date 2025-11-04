@@ -82,8 +82,9 @@
       <section class="file-input-section">
         <label for="partSelector">Select Part to Process:</label>
         <select id="partSelector" style="width: 100%; padding: 10px; border: 2px solid #ccc; border-radius: 4px; font-size: 14px;">
+          <option value="" selected>-- Select a Part to Load --</option>
           <option value="1">Part 1 - Food Exclusion Tag_RootFile_Part1.xlsx</option>
-          <option value="2" selected>Part 2 - Food Exclusion Tag_RootFile_Part2.xlsx</option>
+          <option value="2">Part 2 - Food Exclusion Tag_RootFile_Part2.xlsx</option>
           <option value="3">Part 3 - Food Exclusion Tag_RootFile_Part3.xlsx</option>
           <option value="4">Part 4 - Food Exclusion Tag_RootFile_Part4.xlsx</option>
           <option value="5">Part 5 - Food Exclusion Tag_RootFile_Part5.xlsx</option>
@@ -99,6 +100,9 @@
           🎯 Select which part you want to process. Extension will auto-continue from this part onwards.
         </p>
         <div style="margin-top: 10px;">
+          <button id="loadPartBtn" class="btn btn-secondary" style="width: 100%; margin-bottom: 10px;" disabled>
+            📂 Load Selected Part
+          </button>
           <label>
             <input type="checkbox" id="singlePartMode" style="margin-right: 8px;">
             Process only selected part (don't auto-continue to next parts)

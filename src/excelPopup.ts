@@ -6,6 +6,7 @@ import { ExcelWorkflowManager } from './excelWorkflow';
  */
 const elements = {
   partSelector: document.getElementById('partSelector') as HTMLSelectElement,
+  loadPartBtn: document.getElementById('loadPartBtn') as HTMLButtonElement,
   singlePartMode: document.getElementById('singlePartMode') as HTMLInputElement,
   openTabBtn: document.getElementById('openTabBtn') as HTMLButtonElement,
   startBtn: document.getElementById('startBtn') as HTMLButtonElement,
@@ -241,7 +242,7 @@ async function loadPartFile(partNumber: number): Promise<void> {
     addLog(`📂 Current file: Part${partNumber}.xlsx - REVIEW: ${reviewRowsCount} | OK: ${okRowsCount}`);
     elements.statsSection.style.display = 'block';
     updateStats();
-    elements.startBtn.disabled = false;
+    // Note: startBtn will be enabled by loadSelectedPart() function
 
   } catch (error) {
     addLog(`❌ Error loading Part${partNumber}: ${error}`, 'error');
@@ -900,30 +901,60 @@ if (TEST_MODE) {
 } else {
   addLog('Excel Tag Automation - Production Mode');
 }
-// Initialize with selected part from UI
-function initializeWithSelectedPart() {
-  const selectedPart = parseInt(elements.partSelector.value);
+// Load selected part when user clicks Load Part button
+function loadSelectedPart() {
+  const selectedValue = elements.partSelector.value;
+
+  if (!selectedValue || selectedValue === '') {
+    addLog('❌ Please select a part first', 'error');
+    return;
+  }
+
+  const selectedPart = parseInt(selectedValue);
   currentPartIndex = selectedPart;
 
   addLog(`🚀 Loading Part${selectedPart}.xlsx...`);
   updateStatus(`Loading Part${selectedPart}...`, 'loading');
+  elements.loadPartBtn.disabled = true;
+  elements.loadPartBtn.textContent = '⏳ Loading...';
 
   loadPartFile(selectedPart).then(() => {
     addLog(`✅ Part${selectedPart} loaded - Ready to start!`, 'success');
     updateStatus(`Part${selectedPart} loaded - Ready`, 'ready');
+    elements.loadPartBtn.textContent = '✅ Part Loaded';
+    elements.startBtn.disabled = false;
   }).catch((error) => {
     addLog(`❌ Failed to load Part${selectedPart}: ${error}`, 'error');
     updateStatus(`Error loading Part${selectedPart}`, 'error');
+    elements.loadPartBtn.disabled = false;
+    elements.loadPartBtn.textContent = '📂 Load Selected Part';
   });
 }
 
-// Listen for part selector changes
+// Listen for part selector changes - enable/disable Load Part button
 elements.partSelector.addEventListener('change', () => {
+  const selectedValue = elements.partSelector.value;
+  elements.loadPartBtn.disabled = !selectedValue || selectedValue === '' || isProcessing;
+
+  if (selectedValue && selectedValue !== '') {
+    elements.loadPartBtn.textContent = `📂 Load Part ${selectedValue}`;
+  } else {
+    elements.loadPartBtn.textContent = '📂 Load Selected Part';
+  }
+
+  // Reset start button when changing selection
+  elements.startBtn.disabled = true;
+});
+
+// Listen for Load Part button click
+elements.loadPartBtn.addEventListener('click', () => {
   if (!isProcessing) {
-    initializeWithSelectedPart();
+    loadSelectedPart();
   }
 });
 
-// Initialize on startup
-initializeWithSelectedPart();
+// Initialize on startup - no auto-load
+addLog('📋 Select a part and click "Load Part" to begin');
+updateStatus('Select a part to load', 'ready');
+elements.startBtn.disabled = true;
 
