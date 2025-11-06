@@ -3,41 +3,42 @@ import { Logger } from './utils';
 
 /**
  * Tag mapping configuration
+ * Column structure: A=_id, B=Status from BA, C=Status, D=Ingredient Name, E=SKIP, F-N=Tags
  */
 const TAG_COLUMNS = {
-  'AT': {
+  'F': {
     name: 'Protein Sources',
     tags: ['Beef', 'Pork', 'Chicken', 'Turkey', 'Lamb', 'Fish', 'Shellfish', 'Eggs', 'Dairy']
   },
-  'AU': {
+  'G': {
     name: 'Dairy Alternatives',
     tags: ['Lactose-Free', 'Non-Dairy Milk', 'Non-Dairy Cheese']
   },
-  'AV': {
+  'H': {
     name: 'Grains & Starches',
     tags: ['Wheat', 'Gluten-Free Grains', 'Pasta Alternatives', 'Potatoes', 'Corn']
   },
-  'AW': {
+  'I': {
     name: 'Legumes & Nuts',
     tags: ['Beans', 'Peanuts', 'Tree Nuts', 'Soy', 'Lentils']
   },
-  'AX': {
+  'J': {
     name: 'Vegetables',
     tags: ['Nightshades', 'Cruciferous', 'Leafy Greens', 'Mushrooms', 'Alliums']
   },
-  'AY': {
+  'K': {
     name: 'Fruits',
     tags: ['Citrus', 'Berries', 'Tropical Fruits', 'Stone Fruits', 'Melons']
   },
-  'AZ': {
+  'L': {
     name: 'Herbs & Spices',
     tags: ['Dried Herbs & Spices', 'Fresh Herbs', 'Spicy']
   },
-  'BA': {
+  'M': {
     name: 'Miscellaneous',
     tags: ['Sweeteners', 'Alcohol', 'Caffeine']
   },
-  'BB': {
+  'N': {
     name: 'Others (Fallback)',
     tags: ['Other']
   }
@@ -113,6 +114,9 @@ export class ExcelWorkflowManager {
 
   /**
    * Get rows with REVIEW status
+   * Supports multiple status variants (case-insensitive):
+   * - REVIEW, review
+   * - NOT-OK, not-ok, not-oke, not ok, NOT OK, etc.
    */
   getReviewRows(): ExcelRow[] {
     if (!this.worksheet) {
@@ -121,26 +125,32 @@ export class ExcelWorkflowManager {
 
     const rows: ExcelRow[] = [];
     const range = XLSX.utils.decode_range(this.worksheet['!ref'] || 'A1');
-    
+
     // Start from row 2 (skip header)
+    // Column structure: A=_id, B=Status From BA, C=Status, D=Ingredient Name
     for (let rowNum = 2; rowNum <= range.e.r + 1; rowNum++) {
-      const statusCell = this.worksheet[`B${rowNum}`];
+      const statusCell = this.worksheet[`C${rowNum}`];
       const status = statusCell ? String(statusCell.v).trim() : '';
-      
-      if (status === 'REVIEW') {
+      const statusLower = status.toLowerCase().replace(/[\s-_]/g, ''); // Normalize: remove spaces, dashes, underscores
+
+      // Check if status is REVIEW or any variant of NOT-OK
+      const isReview = statusLower === 'review';
+      const isNotOk = statusLower === 'notok' || statusLower === 'notoke';
+
+      if (isReview || isNotOk) {
         const idCell = this.worksheet[`A${rowNum}`];
-        const nameCell = this.worksheet[`C${rowNum}`];
-        
+        const nameCell = this.worksheet[`D${rowNum}`];
+
         rows.push({
           rowIndex: rowNum,
           _id: idCell ? String(idCell.v) : '',
-          status: status,
+          status: status, // Keep original status
           name: nameCell ? String(nameCell.v) : ''
         });
       }
     }
 
-    Logger.log(`Found ${rows.length} rows with REVIEW status`);
+    Logger.log(`Found ${rows.length} rows with REVIEW/NOT-OK status`);
     return rows;
   }
 
@@ -217,15 +227,15 @@ export class ExcelWorkflowManager {
   }
 
   /**
-   * Clear all tag columns (AT-BB) for a row before writing new tags
+   * Clear all tag columns (F-N) for a row before writing new tags
    */
   clearTagColumns(rowIndex: number): void {
     if (!this.worksheet) {
       throw new Error('Worksheet not loaded');
     }
 
-    // Clear columns AT to BB
-    const columns = Object.keys(TAG_COLUMNS); // ['AT', 'AU', 'AV', 'AW', 'AX', 'AY', 'AZ', 'BA', 'BB']
+    // Clear columns F to N (tag columns)
+    const columns = Object.keys(TAG_COLUMNS); // ['F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']
 
     for (const column of columns) {
       const cellAddress = `${column}${rowIndex}`;
@@ -233,7 +243,7 @@ export class ExcelWorkflowManager {
       delete this.worksheet[cellAddress];
     }
 
-    Logger.log(`🗑️ Cleared tag columns AT-BB for row ${rowIndex}`);
+    Logger.log(`🗑️ Cleared tag columns F-N for row ${rowIndex}`);
   }
 
   /**
@@ -264,7 +274,7 @@ export class ExcelWorkflowManager {
       throw new Error('Worksheet not loaded');
     }
 
-    const cellAddress = `B${rowIndex}`;
+    const cellAddress = `C${rowIndex}`; // Changed from B to C (Status column)
 
     // Set cell value with green background for "OK" status
     this.worksheet[cellAddress] = {
