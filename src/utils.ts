@@ -1,25 +1,31 @@
 import { ButtonState, WaitConfig } from './types';
+import {
+  LOG_PREFIXES,
+  TIMING,
+  DOM_SELECTORS,
+  RETRY_CONFIG
+} from './constants';
 
 /**
  * Logger utility with timestamp
  */
 export class Logger {
-  private static prefix = '[Perplexity Automation]';
+  private static readonly PREFIX = LOG_PREFIXES.CONTENT;
 
   static log(message: string, ...args: any[]): void {
-    console.log(`${this.prefix} ${new Date().toISOString()} - ${message}`, ...args);
+    console.log(`${this.PREFIX} ${new Date().toISOString()} - ${message}`, ...args);
   }
 
   static error(message: string, ...args: any[]): void {
-    console.error(`${this.prefix} ${new Date().toISOString()} - ERROR: ${message}`, ...args);
+    console.error(`${this.PREFIX} ${new Date().toISOString()} - ERROR: ${message}`, ...args);
   }
 
   static warn(message: string, ...args: any[]): void {
-    console.warn(`${this.prefix} ${new Date().toISOString()} - WARN: ${message}`, ...args);
+    console.warn(`${this.PREFIX} ${new Date().toISOString()} - WARN: ${message}`, ...args);
   }
 
   static info(message: string, ...args: any[]): void {
-    console.info(`${this.prefix} ${new Date().toISOString()} - INFO: ${message}`, ...args);
+    console.info(`${this.PREFIX} ${new Date().toISOString()} - INFO: ${message}`, ...args);
   }
 }
 
@@ -34,8 +40,8 @@ export async function waitForElement<T extends Element = Element>(
   config: WaitConfig = {}
 ): Promise<T | null> {
   const {
-    timeout = 30000,
-    checkInterval = 100,
+    timeout = TIMING.TIMEOUT_ELEMENT_WAIT,
+    checkInterval = TIMING.POLL_INTERVAL_FAST,
     throwOnTimeout = false
   } = config;
 
@@ -60,7 +66,7 @@ export async function waitForElement<T extends Element = Element>(
       if (Date.now() - startTime >= timeout) {
         const errorMsg = `Timeout waiting for element: ${selectors.join(' OR ')}`;
         Logger.error(errorMsg);
-        
+
         if (throwOnTimeout) {
           reject(new Error(errorMsg));
         } else {
@@ -85,8 +91,8 @@ export async function waitForElementToDisappear(
   config: WaitConfig = {}
 ): Promise<boolean> {
   const {
-    timeout = 30000,
-    checkInterval = 100
+    timeout = TIMING.TIMEOUT_ELEMENT_WAIT,
+    checkInterval = TIMING.POLL_INTERVAL_FAST
   } = config;
 
   const startTime = Date.now();
@@ -96,7 +102,7 @@ export async function waitForElementToDisappear(
   return new Promise((resolve) => {
     const checkElement = () => {
       const element = document.querySelector(selector);
-      
+
       if (!element) {
         Logger.log(`Element disappeared: ${selector}`);
         resolve(true);
@@ -121,21 +127,21 @@ export async function waitForElementToDisappear(
  */
 export function detectButtonState(): ButtonState {
   // State 1: Voice mode button (ready to submit)
-  const voiceButton = document.querySelector('button[aria-label="Voice mode"]');
+  const voiceButton = document.querySelector(DOM_SELECTORS.VOICE_MODE_BUTTON);
   if (voiceButton) {
     Logger.log('Button state: READY (Voice mode visible)');
     return ButtonState.READY;
   }
 
   // State 3: Disabled submit button (response complete)
-  const disabledButton = document.querySelector('button[data-testid="submit-button"][disabled]');
+  const disabledButton = document.querySelector(`${DOM_SELECTORS.SUBMIT_BUTTONS[1]}[disabled]`);
   if (disabledButton) {
     Logger.log('Button state: DISABLED (Response complete)');
     return ButtonState.DISABLED;
   }
 
   // State 2: Loading/processing (submit button exists but not disabled)
-  const submitButton = document.querySelector('button[data-testid="submit-button"]:not([disabled])');
+  const submitButton = document.querySelector(`${DOM_SELECTORS.SUBMIT_BUTTONS[1]}:not([disabled])`);
   if (submitButton) {
     Logger.log('Button state: LOADING (Processing)');
     return ButtonState.LOADING;
@@ -153,8 +159,8 @@ export async function waitForButtonState(
   config: WaitConfig = {}
 ): Promise<boolean> {
   const {
-    timeout = 60000,
-    checkInterval = 500
+    timeout = TIMING.TIMEOUT_BUTTON_STATE,
+    checkInterval = TIMING.POLL_INTERVAL_STANDARD
   } = config;
 
   const startTime = Date.now();
@@ -164,7 +170,7 @@ export async function waitForButtonState(
   return new Promise((resolve) => {
     const checkState = () => {
       const currentState = detectButtonState();
-      
+
       if (currentState === targetState) {
         Logger.log(`Button reached target state: ${targetState}`);
         resolve(true);
@@ -217,10 +223,10 @@ export async function retry<T>(
   } = {}
 ): Promise<T> {
   const {
-    maxAttempts = 3,
-    initialDelay = 1000,
-    maxDelay = 10000,
-    backoffMultiplier = 2
+    maxAttempts = RETRY_CONFIG.MAX_ATTEMPTS,
+    initialDelay = RETRY_CONFIG.INITIAL_DELAY,
+    maxDelay = RETRY_CONFIG.MAX_DELAY,
+    backoffMultiplier = RETRY_CONFIG.BACKOFF_MULTIPLIER
   } = options;
 
   let lastError: Error | undefined;

@@ -1,28 +1,34 @@
 import { MessageType, Message } from './types';
+import {
+  PERPLEXITY_BASE_URL,
+  TIMING,
+  LOG_PREFIXES,
+  ERROR_MESSAGES,
+  MESSAGE_TYPES
+} from './constants';
 import './reload'; // Auto-reload in development
-
-const PERPLEXITY_URL = 'https://www.perplexity.ai/';
+import { backgroundProcessor } from './backgroundProcessor';
 
 /**
  * Logger for background script
  */
 class BackgroundLogger {
-  private static prefix = '[Background]';
+  private static readonly PREFIX = LOG_PREFIXES.BACKGROUND;
 
   static log(message: string, ...args: any[]): void {
-    console.log(`${this.prefix} ${new Date().toISOString()} - ${message}`, ...args);
+    console.log(`${this.PREFIX} ${new Date().toISOString()} - ${message}`, ...args);
   }
 
   static error(message: string, ...args: any[]): void {
-    console.error(`${this.prefix} ${new Date().toISOString()} - ERROR: ${message}`, ...args);
+    console.error(`${this.PREFIX} ${new Date().toISOString()} - ERROR: ${message}`, ...args);
   }
 
   static warn(message: string, ...args: any[]): void {
-    console.warn(`${this.prefix} ${new Date().toISOString()} - WARN: ${message}`, ...args);
+    console.warn(`${this.PREFIX} ${new Date().toISOString()} - WARN: ${message}`, ...args);
   }
 
   static info(message: string, ...args: any[]): void {
-    console.info(`${this.prefix} ${new Date().toISOString()} - INFO: ${message}`, ...args);
+    console.info(`${this.PREFIX} ${new Date().toISOString()} - INFO: ${message}`, ...args);
   }
 }
 
@@ -31,16 +37,16 @@ class BackgroundLogger {
  */
 async function findPerplexityTab(): Promise<chrome.tabs.Tab | null> {
   BackgroundLogger.log('Searching for existing Perplexity tab...');
-  
+
   const tabs = await chrome.tabs.query({});
-  
+
   for (const tab of tabs) {
-    if (tab.url && tab.url.startsWith(PERPLEXITY_URL)) {
+    if (tab.url && tab.url.startsWith(PERPLEXITY_BASE_URL)) {
       BackgroundLogger.log(`Found existing tab: ${tab.id} - ${tab.url}`);
       return tab;
     }
   }
-  
+
   BackgroundLogger.log('No existing Perplexity tab found');
   return null;
 }
@@ -50,36 +56,34 @@ async function findPerplexityTab(): Promise<chrome.tabs.Tab | null> {
  */
 async function openOrSwitchToPerplexity(): Promise<chrome.tabs.Tab> {
   BackgroundLogger.log('Opening or switching to Perplexity...');
-  
+
   // Try to find existing tab
   const existingTab = await findPerplexityTab();
-  
+
   if (existingTab && existingTab.id) {
     // Switch to existing tab
     BackgroundLogger.log(`Switching to existing tab: ${existingTab.id}`);
-    
+
     // Activate the tab
     await chrome.tabs.update(existingTab.id, { active: true });
-    
+
     // Focus the window containing the tab
     if (existingTab.windowId) {
       await chrome.windows.update(existingTab.windowId, { focused: true });
     }
-    
-    // Reload the tab to ensure fresh state
-    await chrome.tabs.reload(existingTab.id);
-    
-    BackgroundLogger.log('Switched to existing tab and reloaded');
+
+    // Don't reload - keep existing state
+    BackgroundLogger.log('Switched to existing tab (no reload)');
     return existingTab;
   } else {
     // Create new tab
     BackgroundLogger.log('Creating new Perplexity tab...');
-    
+
     const newTab = await chrome.tabs.create({
-      url: PERPLEXITY_URL,
+      url: PERPLEXITY_BASE_URL,
       active: true
     });
-    
+
     BackgroundLogger.log(`Created new tab: ${newTab.id}`);
     return newTab;
   }
@@ -88,35 +92,51 @@ async function openOrSwitchToPerplexity(): Promise<chrome.tabs.Tab> {
 /**
  * Wait for tab to be fully loaded
  */
-async function waitForTabReady(tabId: number, timeout: number = 30000): Promise<boolean> {
+async function waitForTabReady(
+  tabId: number,
+  timeout: number = TIMING.TIMEOUT_TAB_READY
+): Promise<boolean> {
   BackgroundLogger.log(`Waiting for tab ${tabId} to be ready...`);
-  
+
+  try {
+    const tab = await chrome.tabs.get(tabId);
+
+    // If already complete, return immediately
+    if (tab.status === 'complete') {
+      BackgroundLogger.log(`Tab ${tabId} is already ready`);
+      return true;
+    }
+  } catch (error) {
+    BackgroundLogger.error(`Error getting tab ${tabId}:`, error);
+    return false;
+  }
+
   const startTime = Date.now();
-  
+
   return new Promise((resolve) => {
     const checkTab = async () => {
       try {
         const tab = await chrome.tabs.get(tabId);
-        
+
         if (tab.status === 'complete') {
           BackgroundLogger.log(`Tab ${tabId} is ready`);
           resolve(true);
           return;
         }
-        
+
         if (Date.now() - startTime >= timeout) {
           BackgroundLogger.error(`Timeout waiting for tab ${tabId}`);
           resolve(false);
           return;
         }
-        
-        setTimeout(checkTab, 500);
+
+        setTimeout(checkTab, TIMING.POLL_INTERVAL_STANDARD);
       } catch (error) {
         BackgroundLogger.error(`Error checking tab ${tabId}:`, error);
         resolve(false);
       }
     };
-    
+
     checkTab();
   });
 }
@@ -148,56 +168,67 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
       switch (message.type) {
         case MessageType.OPEN_OR_SWITCH_TAB: {
           BackgroundLogger.log('Handling OPEN_OR_SWITCH_TAB request');
-          
-          // Open or switch to Perplexity
-          const tab = await openOrSwitchToPerplexity();
-          
-          if (!tab.id) {
-            throw new Error('Failed to get tab ID');
+
+          try {
+            // Open or switch to Perplexity
+            const tab = await openOrSwitchToPerplexity();
+
+            if (!tab.id) {
+              throw new Error(ERROR_MESSAGES.TAB_NOT_FOUND);
+            }
+
+            // Wait for tab to be ready
+            const isReady = await waitForTabReady(tab.id);
+
+            if (!isReady) {
+              throw new Error(ERROR_MESSAGES.TAB_LOAD_FAILED);
+            }
+
+            // Store tab ID in background processor
+            backgroundProcessor.getState().perplexityTabId = tab.id;
+
+            // Send response
+            sendResponse({
+              success: true,
+              tabId: tab.id,
+              url: tab.url
+            });
+          } catch (error) {
+            BackgroundLogger.error('Failed to open/switch tab:', error);
+            sendResponse({
+              success: false,
+              error: error instanceof Error ? error.message : String(error)
+            });
           }
-          
-          // Wait for tab to be ready
-          const isReady = await waitForTabReady(tab.id);
-          
-          if (!isReady) {
-            throw new Error('Tab failed to load');
-          }
-          
-          // Send response
-          sendResponse({
-            success: true,
-            tabId: tab.id,
-            url: tab.url
-          });
-          
+
           break;
         }
         
         case MessageType.OPEN_TAB: {
-          BackgroundLogger.log('🔄 Handling OPEN_TAB request');
+          BackgroundLogger.log('Handling OPEN_TAB request');
 
-          const url = message.payload?.url || 'https://www.perplexity.ai';
-          BackgroundLogger.log(`📂 Creating new tab with URL: ${url}`);
+          const url = message.payload?.url || PERPLEXITY_BASE_URL;
+          BackgroundLogger.log(`Creating new tab with URL: ${url}`);
 
           const tab = await chrome.tabs.create({ url });
-          BackgroundLogger.log(`✅ Tab created with ID: ${tab.id}`);
+          BackgroundLogger.log(`Tab created with ID: ${tab.id}`);
 
           if (!tab.id) {
-            BackgroundLogger.error('❌ Failed to create tab - no tab ID');
-            throw new Error('Failed to create tab');
+            BackgroundLogger.error('Failed to create tab - no tab ID');
+            throw new Error(ERROR_MESSAGES.TAB_CREATE_FAILED);
           }
 
           // Wait for tab to be ready
-          BackgroundLogger.log(`⏳ Waiting for tab ${tab.id} to be ready...`);
+          BackgroundLogger.log(`Waiting for tab ${tab.id} to be ready...`);
           const isReady = await waitForTabReady(tab.id);
-          BackgroundLogger.log(`✅ Tab ${tab.id} ready: ${isReady}`);
+          BackgroundLogger.log(`Tab ${tab.id} ready: ${isReady}`);
 
           const responseData = {
             success: isReady,
             tabId: tab.id,
             url: tab.url
           };
-          BackgroundLogger.log(`📤 Sending response: ${JSON.stringify(responseData)}`);
+          BackgroundLogger.log(`Sending response: ${JSON.stringify(responseData)}`);
           sendResponse(responseData);
 
           break;
@@ -206,31 +237,93 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
         case MessageType.START_WORKFLOW: {
           BackgroundLogger.log('Handling START_WORKFLOW request');
 
-          // First, ensure we have a Perplexity tab
-          const tab = await openOrSwitchToPerplexity();
+          try {
+            // First, ensure we have a Perplexity tab
+            const tab = await openOrSwitchToPerplexity();
 
-          if (!tab.id) {
-            throw new Error('Failed to get tab ID');
+            if (!tab.id) {
+              throw new Error(ERROR_MESSAGES.TAB_NOT_FOUND);
+            }
+
+            // Wait for tab to be ready
+            const isReady = await waitForTabReady(tab.id);
+
+            if (!isReady) {
+              throw new Error(ERROR_MESSAGES.TAB_LOAD_FAILED);
+            }
+
+            // Store tab ID in background processor
+            backgroundProcessor.getState().perplexityTabId = tab.id;
+
+            // Forward the workflow start message to content script
+            await sendMessageToTab(tab.id, {
+              type: MessageType.START_WORKFLOW,
+              payload: message.payload
+            });
+
+            sendResponse({
+              success: true,
+              tabId: tab.id
+            });
+          } catch (error) {
+            BackgroundLogger.error('Failed to start workflow:', error);
+            sendResponse({
+              success: false,
+              error: error instanceof Error ? error.message : String(error)
+            });
           }
 
-          // Wait for tab to be ready
-          const isReady = await waitForTabReady(tab.id);
+          break;
+        }
 
-          if (!isReady) {
-            throw new Error('Tab failed to load');
+        case MessageType.GET_STATE: {
+          BackgroundLogger.log('Handling GET_STATE request');
+          sendResponse({ success: true, state: backgroundProcessor.getState() });
+          break;
+        }
+
+        case MessageType.CREATE_THREAD: {
+          BackgroundLogger.log('Handling CREATE_THREAD request');
+          BackgroundLogger.log('Message:', message);
+          BackgroundLogger.log('Payload:', message.payload);
+          try {
+            const partNumber = message.payload?.partNumber || (message as any).partNumber;
+            const fileName = message.payload?.fileName || (message as any).fileName;
+            const filePath = message.payload?.filePath || (message as any).filePath;
+
+            BackgroundLogger.log(`Extracted: partNumber=${partNumber}, fileName=${fileName}, filePath=${filePath}`);
+
+            const threadId = await backgroundProcessor.createThread(
+              partNumber,
+              fileName,
+              filePath
+            );
+            sendResponse({ success: true, threadId });
+          } catch (error) {
+            BackgroundLogger.error('Failed to create thread:', error);
+            sendResponse({
+              success: false,
+              error: error instanceof Error ? error.message : String(error)
+            });
           }
+          break;
+        }
 
-          // Forward the workflow start message to content script
-          await sendMessageToTab(tab.id, {
-            type: MessageType.START_WORKFLOW,
-            payload: message.payload
-          });
+        case MessageType.START_PROCESSING: {
+          BackgroundLogger.log('Handling START_PROCESSING request');
+          BackgroundLogger.log('Message:', message);
+          const threadId = message.payload?.threadId || (message as any).threadId;
+          const testMode = message.payload?.testMode !== undefined ? message.payload.testMode : (message as any).testMode;
+          BackgroundLogger.log(`Extracted: threadId=${threadId}, testMode=${testMode}`);
+          await backgroundProcessor.startProcessing(threadId, testMode);
+          sendResponse({ success: true });
+          break;
+        }
 
-          sendResponse({
-            success: true,
-            tabId: tab.id
-          });
-
+        case MessageType.STOP_PROCESSING: {
+          BackgroundLogger.log('Handling STOP_PROCESSING request');
+          backgroundProcessor.stopProcessing();
+          sendResponse({ success: true });
           break;
         }
 
@@ -271,24 +364,24 @@ async function ensureContentScript(tabId: number): Promise<void> {
   try {
     // Check if tab is Perplexity
     const tab = await chrome.tabs.get(tabId);
-    if (!tab.url?.startsWith(PERPLEXITY_URL)) {
+    if (!tab.url?.startsWith(PERPLEXITY_BASE_URL)) {
       return;
     }
 
-    BackgroundLogger.log(`🔍 Checking content script for tab ${tabId}`);
+    BackgroundLogger.log(`Checking content script for tab ${tabId}`);
 
     // Try to ping content script
     try {
-      await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-      BackgroundLogger.log(`✅ Content script already loaded in tab ${tabId}`);
+      await chrome.tabs.sendMessage(tabId, { type: MESSAGE_TYPES.PING });
+      BackgroundLogger.log(`Content script already loaded in tab ${tabId}`);
     } catch (error) {
       // Content script not loaded, inject it
-      BackgroundLogger.log(`💉 Injecting content script into tab ${tabId}`);
+      BackgroundLogger.log(`Injecting content script into tab ${tabId}`);
       await chrome.scripting.executeScript({
         target: { tabId: tabId },
         files: ['content.js']
       });
-      BackgroundLogger.log(`✅ Content script injected into tab ${tabId}`);
+      BackgroundLogger.log(`Content script injected into tab ${tabId}`);
     }
   } catch (error) {
     BackgroundLogger.error('Error ensuring content script:', error);
@@ -299,8 +392,8 @@ async function ensureContentScript(tabId: number): Promise<void> {
  * Handle tab updates - Auto inject content script
  */
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url?.startsWith(PERPLEXITY_URL)) {
-    BackgroundLogger.log(`📄 Perplexity tab ${tabId} loaded, ensuring content script...`);
+  if (changeInfo.status === 'complete' && tab.url?.startsWith(PERPLEXITY_BASE_URL)) {
+    BackgroundLogger.log(`Perplexity tab ${tabId} loaded, ensuring content script...`);
     ensureContentScript(tabId);
   }
 });
@@ -311,8 +404,8 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
-    if (tab.url?.startsWith(PERPLEXITY_URL)) {
-      BackgroundLogger.log(`👁️ Switched to Perplexity tab ${activeInfo.tabId}, ensuring content script...`);
+    if (tab.url?.startsWith(PERPLEXITY_BASE_URL)) {
+      BackgroundLogger.log(`Switched to Perplexity tab ${activeInfo.tabId}, ensuring content script...`);
       ensureContentScript(activeInfo.tabId);
     }
   } catch (error) {

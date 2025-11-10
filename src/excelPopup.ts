@@ -441,10 +441,11 @@ async function sendToContentScript(message: any, retries: number = 3): Promise<a
 
 /**
  * Wait for markdown content
- * If not found after maxWait, trigger new thread and retry
+ * If no codeblock found, immediately trigger new thread
  */
 async function waitForMarkdown(index: number, maxWait: number = 60000): Promise<string> {
   const startTime = Date.now();
+  let noCodeBlockDetected = false;
 
   while (Date.now() - startTime < maxWait) {
     try {
@@ -453,75 +454,118 @@ async function waitForMarkdown(index: number, maxWait: number = 60000): Promise<
         payload: { index }
       });
 
-      if (response.success && response.content) {
+      // ✅ SUCCESS: Found valid codeblock content
+      if (response.success && response.content && response.content.trim() !== '') {
+        addLog(`✅ Found markdown-content-${index} with codeblock content`);
         return response.content;
       }
+
+      // ⚠️ CRITICAL: Markdown exists but NO CODEBLOCK
+      if (response.success && response.markdownExists && !response.hasCode) {
+        addLog(`⚠️ markdown-content-${index} exists but NO CODEBLOCK found!`, 'warning');
+        
+        if (response.rawText && response.rawText.trim() !== '') {
+          addLog(`📝 AI responded with text: ${response.rawText.substring(0, 100)}...`, 'warning');
+          addLog(`❌ AI didn't provide JSON codeblock - IMMEDIATE NEW THREAD!`, 'warning');
+          noCodeBlockDetected = true;
+          break; // Exit loop immediately
+        }
+      }
+
+      // 🔍 Still waiting for response
+      if (!response.success || !response.markdownExists) {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        if (elapsed % 10 === 0) { // Log every 10 seconds
+          addLog(`⏳ Still waiting for markdown-content-${index}... (${elapsed}s)`);
+        }
+      }
+
     } catch (error) {
-      // Continue waiting
+      addLog(`❌ Error checking markdown-${index}: ${error}`, 'warning');
     }
 
     await sleep(2000);
   }
 
-  // Timeout - markdown not found, trigger new thread
-  addLog(`⚠️ Markdown-content-${index} not found after ${maxWait/1000}s`, 'warning');
-  addLog('🔄 Triggering new thread due to missing markdown...', 'warning');
+  // 🔄 TRIGGER NEW THREAD
+  const reason = noCodeBlockDetected ? 'NO CODEBLOCK DETECTED' : 'TIMEOUT';
+  const elapsed = Math.round((Date.now() - startTime) / 1000);
+  
+  addLog(`🚨 ${reason} for markdown-content-${index} after ${elapsed}s`, 'error');
+  addLog(`🔄 Creating new thread immediately...`, 'warning');
 
-  // Create new thread
   try {
-    const response = await sendToContentScript({
+    // Create new thread
+    addLog(`🔄 Clicking "New Thread" button...`, 'warning');
+    const newThreadResponse = await sendToContentScript({
       type: MessageType.NEW_THREAD
     });
 
-    if (response && response.success) {
-      addLog('✅ New thread created due to missing markdown');
+    if (newThreadResponse && newThreadResponse.success) {
+      addLog(`✅ New thread created due to: ${reason}`, 'success');
+      addLog(`⏳ Content script already waited 5s for new thread to load`, 'info');
 
-      // Reset markdown counter only (keep rowsProcessedInCurrentThread)
-      const oldMarkdownCounter = markdownCounter;
+      // CRITICAL: Reset markdown counter IMMEDIATELY after new thread
+      const oldCounter = markdownCounter;
       markdownCounter = 0;
-      addLog(`🔄 Markdown counter reset: ${oldMarkdownCounter} → 0 (rowsProcessedInCurrentThread=${rowsProcessedInCurrentThread} kept)`);
+      addLog(`🔄 Markdown counter reset: ${oldCounter} → 0`, 'info');
 
-      // Send initial prompt again
-      addLog('📤 Sending initial prompt to new thread...');
+      // Reset rows in current thread
+      rowsProcessedInCurrentThread = 0;
+      addLog(`🔄 Thread row counter reset: 0`, 'info');
+
+      // Reset promptSent flag
+      promptSent = false;
+      addLog(`🔄 promptSent flag reset: false`, 'info');
+
+      // Send initial prompt to new thread (after 5s wait in content script)
       const firstManager = Array.from(workflowManagers.values())[0];
       if (firstManager) {
+        addLog(`📤 Sending initial prompt to new thread...`, 'info');
         await sendToContentScript({
           type: MessageType.START_WORKFLOW,
           payload: { prompt: firstManager['promptContent'] }
         });
         await sleep(10000);
-        addLog('✅ Initial prompt sent to new thread (will be markdown-0, skipped)');
+        promptSent = true;
+        addLog(`✅ Initial prompt sent (will be markdown-0, skipped)`, 'success');
+        addLog(`📊 Current state: markdownCounter=${markdownCounter}, promptSent=${promptSent}`, 'info');
       }
 
-      // Now we need to re-send the CURRENT ROW's prompt (not retry markdown-1)
-      // Because markdown-1 doesn't exist yet - it will be created by the current row
-      addLog(`🔄 Re-sending current row prompt to new thread...`);
-
-      // The caller (processRow) will handle re-sending the prompt
-      // We just need to signal that we're ready for a new request
-      // Return empty to trigger re-send in processRow
+      // Signal that new thread was created and retry is needed
       throw new Error('NEW_THREAD_CREATED_RETRY_NEEDED');
+    } else {
+      throw new Error('Failed to create new thread');
     }
   } catch (error) {
+    if (error instanceof Error && error.message === 'NEW_THREAD_CREATED_RETRY_NEEDED') {
+      throw error; // Re-throw to be handled by caller
+    }
     addLog(`❌ Error creating new thread: ${error}`, 'error');
+    throw new Error(`Failed to create new thread: ${error}`);
   }
-
-  throw new Error(`Timeout waiting for markdown-content-${index} even after new thread`);
 }
 
 /**
  * Process single row
  */
-async function processRow(row: any, iteration: number): Promise<void> {
-  addLog(`\n=== Processing Row ${iteration + 1}/${reviewRows.length} ===`);
-  addLog(`File: ${row.fileName}, ID: ${row._id}, Name: ${row.name}`);
+async function processRow(row: any, rowIndex: number): Promise<void> {
+  addLog(`\n📋 Processing row ${rowIndex + 1}/${reviewRows.length}: ${row.name}`);
 
-  // Get manager for this row
+  // Get the workflow manager for this row
   const manager = row.manager as ExcelWorkflowManager;
+  if (!manager) {
+    addLog(`❌ No workflow manager found for row ${rowIndex + 1}`, 'error');
+    return;
+  }
 
-  // Format input
-  const input = manager.formatInput(row);
-  addLog(`Input: ${input}`);
+  // Format input (ingredient name only for subsequent rows)
+  const isFirstRowInThread = rowsProcessedInCurrentThread === 0;
+  const input = isFirstRowInThread ?
+    manager.formatInput(row, true) :  // Full prompt for first row
+    row.name; // Just ingredient name for other rows
+
+  addLog(`📤 Sending: ${isFirstRowInThread ? 'Full prompt' : 'Ingredient name'}`);
 
   // Send to AI
   await sendToContentScript({
@@ -530,21 +574,19 @@ async function processRow(row: any, iteration: number): Promise<void> {
   });
 
   addLog('⏳ Waiting for AI response...');
-  await sleep(5000); // Wait for AI to start processing
+  await sleep(5000);
 
-  // Increment global markdown counter
+  // Increment markdown counter
   markdownCounter++;
-
-  // Wait for markdown content using global counter
-  addLog(`🔍 Waiting for markdown-content-${markdownCounter} (rowsProcessedInCurrentThread=${rowsProcessedInCurrentThread})...`);
+  addLog(`🔍 Waiting for markdown-content-${markdownCounter}...`);
 
   let content: string;
   try {
     content = await waitForMarkdown(markdownCounter);
   } catch (error) {
-    // Check if new thread was created and we need to retry
+    // Handle new thread creation
     if (error instanceof Error && error.message === 'NEW_THREAD_CREATED_RETRY_NEEDED') {
-      addLog('🔄 New thread created, re-sending prompt for current row...');
+      addLog(`🔄 New thread created, retrying current row...`, 'warning');
 
       // Re-send prompt to new thread
       await sendToContentScript({
@@ -552,41 +594,30 @@ async function processRow(row: any, iteration: number): Promise<void> {
         payload: { prompt: input }
       });
 
-      addLog('⏳ Waiting for AI response in new thread...');
       await sleep(5000);
+      markdownCounter++; // Increment for retry
+      addLog(`🔍 Retry: Waiting for markdown-content-${markdownCounter}...`);
 
-      // Increment counter again for the retry
-      markdownCounter++;
-      addLog(`🔍 Waiting for markdown-content-${markdownCounter} (retry after new thread)...`);
-
-      // Wait for markdown again
+      // Wait for response in new thread
       content = await waitForMarkdown(markdownCounter);
     } else {
-      // Other error, re-throw
-      throw error;
+      throw error; // Re-throw other errors
     }
   }
 
-  addLog(`✅ Received response from markdown-content-${markdownCounter} (${content.length} chars)`);
+  // Parse and process response
+  try {
+    const tags = manager.parseAIResponse(content);
+    const mappedColumns = manager.mapTagsToColumns(tags);
 
-  // Parse response
-  const tags = manager.parseAIResponse(content);
-  addLog(`Tags: ${tags.join(', ')}`);
+    manager.writeTagsToRow(row.rowIndex, mappedColumns);
+    manager.updateRowStatus(row.rowIndex, 'OK');
 
-  // Map to columns
-  const mappedColumns = manager.mapTagsToColumns(tags);
-  addLog(`Mapped columns: ${JSON.stringify(mappedColumns)}`);
-
-  // Write to Excel
-  manager.writeTagsToRow(row.rowIndex, mappedColumns);
-  manager.updateRowStatus(row.rowIndex, 'OK');
-
-  // Count completed rows
-  const completedCount = iteration + 1;
-  const totalCount = reviewRows.length;
-  const remainingCount = totalCount - completedCount;
-
-  addLog(`✅ Row ${completedCount}/${totalCount} completed (${remainingCount} remaining)`, 'success');
+    addLog(`✅ Row ${rowIndex + 1} processed successfully`, 'success');
+  } catch (error) {
+    addLog(`❌ Failed to process row ${rowIndex + 1}: ${error}`, 'error');
+    manager.updateRowStatus(row.rowIndex, 'ERROR');
+  }
 }
 
 /**
@@ -619,6 +650,20 @@ elements.startBtn.addEventListener('click', async () => {
 
         // Switch to that tab
         await chrome.tabs.update(perplexityTabId, { active: true });
+
+        // Wait for content script to initialize
+        addLog('⏳ Waiting for content script to initialize...', 'info');
+        await sleep(2000);
+
+        // Verify content script is ready by pinging it
+        try {
+          await sendToContentScript({ type: 'PING' });
+          addLog('✅ Content script is ready', 'success');
+        } catch (error) {
+          addLog('⚠️ Content script not responding, re-injecting...', 'warning');
+          await injectContentScript(perplexityTabId);
+          await sleep(2000);
+        }
       } else {
         // Only open new tab if no existing tab found
         addLog('🔄 No Perplexity tab found, opening new one...');
@@ -634,6 +679,19 @@ elements.startBtn.addEventListener('click', async () => {
 
           // Inject content script
           await injectContentScript(response.tabId);
+
+          // Wait for content script to initialize
+          addLog('⏳ Waiting for content script to initialize...', 'info');
+          await sleep(2000);
+
+          // Verify content script is ready
+          try {
+            await sendToContentScript({ type: 'PING' });
+            addLog('✅ Content script is ready', 'success');
+          } catch (error) {
+            addLog('❌ Content script failed to initialize', 'error');
+            return;
+          }
         } else {
           addLog('❌ Failed to open Perplexity', 'error');
           return;
@@ -655,6 +713,16 @@ elements.startBtn.addEventListener('click', async () => {
         return;
       }
       addLog(`✅ Using existing tab ${perplexityTabId}`, 'success');
+
+      // Verify content script is still responsive
+      try {
+        await sendToContentScript({ type: 'PING' });
+        addLog('✅ Content script is responsive', 'success');
+      } catch (error) {
+        addLog('⚠️ Content script not responding, re-injecting...', 'warning');
+        await injectContentScript(perplexityTabId);
+        await sleep(2000);
+      }
     } catch (error) {
       addLog('⚠️ Saved tab not found, finding new one...', 'warning');
       perplexityTabId = null;
@@ -686,6 +754,25 @@ elements.startBtn.addEventListener('click', async () => {
       }
 
       await firstManager.loadPrompt();
+
+      // Verify ask-input is available before sending
+      addLog('🔍 Verifying ask-input element is available...', 'info');
+      try {
+        const verifyResponse = await sendToContentScript({
+          type: 'VERIFY_INPUT'
+        });
+
+        if (!verifyResponse || !verifyResponse.success) {
+          addLog('❌ ask-input element not found! Please make sure Perplexity page is fully loaded.', 'error');
+          addLog('💡 Try refreshing the Perplexity tab and click Start again.', 'warning');
+          return;
+        }
+        addLog('✅ ask-input element is ready', 'success');
+      } catch (error) {
+        addLog(`❌ Failed to verify ask-input: ${error}`, 'error');
+        addLog('💡 Try refreshing the Perplexity tab and click Start again.', 'warning');
+        return;
+      }
 
       await sendToContentScript({
         type: MessageType.START_WORKFLOW,
@@ -726,22 +813,33 @@ elements.startBtn.addEventListener('click', async () => {
 
           // Click "New Thread" button
           try {
+            addLog(`🔄 Clicking "New Thread" button...`, 'warning');
             const response = await sendToContentScript({
               type: MessageType.NEW_THREAD
             });
 
             if (response && response.success) {
               addLog('✅ New thread created successfully');
+              addLog(`⏳ Content script already waited 5s for new thread to load`, 'info');
 
-              // Reset workflow state (NEW THREAD = RESET MARKDOWN COUNTER + ROWS COUNTER)
+              // CRITICAL: Reset workflow state (NEW THREAD = RESET MARKDOWN COUNTER + ROWS COUNTER)
               addLog('🔄 Resetting workflow state for new thread...');
-              promptSent = false;
-              rowsProcessedInCurrentThread = 0;
-              markdownCounter = 0; // Reset markdown counter for new thread
-              addLog(`✅ Counters reset: rowsProcessedInCurrentThread=0, markdownCounter=0`);
+
+              // Reset all counters
+              const oldMarkdownCounter = markdownCounter;
+              const oldRowsCounter = rowsProcessedInCurrentThread;
+
+              markdownCounter = 0; // RESET markdown counter for new thread
+              rowsProcessedInCurrentThread = 0; // RESET rows counter
+              promptSent = false; // RESET prompt flag
+
+              addLog(`✅ Counters reset:`, 'success');
+              addLog(`   - markdownCounter: ${oldMarkdownCounter} → 0`, 'success');
+              addLog(`   - rowsProcessedInCurrentThread: ${oldRowsCounter} → 0`, 'success');
+              addLog(`   - promptSent: true → false`, 'success');
               addLog(`📌 Note: Excel row counter (i=${i}) continues - NOT reset`);
 
-              // Send initial prompt again
+              // Send initial prompt again (after 5s wait in content script)
               addLog('📤 Sending initial prompt to new thread...');
               const firstManager = Array.from(workflowManagers.values())[0];
               if (firstManager) {
@@ -752,6 +850,7 @@ elements.startBtn.addEventListener('click', async () => {
                 await sleep(10000);
                 promptSent = true;
                 addLog('✅ Initial prompt sent to new thread (will be markdown-0, skipped)');
+                addLog(`📊 Current state: markdownCounter=${markdownCounter}, promptSent=${promptSent}`, 'info');
               }
 
               addLog('🔄 ========== NEW THREAD COMPLETE ==========', 'success');

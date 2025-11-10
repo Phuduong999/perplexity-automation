@@ -1,0 +1,104 @@
+/* Excel Popup Compact & Rounded Styling - Fixed Size */
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  background: transparent;
+  width: 480px;
+  height: 600px;
+}
+
+#root {
+  width: 480px;
+  height: 600px;
+  overflow: hidden;
+}
+
+/* Custom scrollbar */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #f1f3f5;
+  border-radius: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #32B8C8;
+  border-radius: 10px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #2a9fb0;
+}
+
+/* Compact spacing */
+.mantine-Stack-root {
+  gap: 8px !important;
+}
+
+/* Ensure proper sizing */
+.mantine-Box-root {
+  max-width: 100%;
+}
+
+/* Rounded corners for all cards */
+.mantine-Card-root {
+  border-radius: 12px !important;
+}
+
+/* Rounded buttons */
+.mantine-Button-root {
+  border-radius: 12px !important;
+}
+
+/* Rounded inputs */
+.mantine-Select-input,
+.mantine-Input-input {
+  border-radius: 12px !important;
+}
+
+/* Rounded accordion */
+.mantine-Accordion-root {
+  border-radius: 12px !important;
+}
+
+.mantine-Accordion-item {
+  border-radius: 12px !important;
+}
+
+/* Compact text */
+.mantine-Title-root {
+  margin-bottom: 4px !important;
+}
+
+/* Progress bar rounded */
+.mantine-Progress-root {
+  border-radius: 12px !important;
+}
+
+/* Badge rounded */
+.mantine-Badge-root {
+  border-radius: 8px !important;
+}
+
+/* Modal rounded */
+.mantine-Modal-content {
+  border-radius: 16px !important;
+}
+
+/* Compact padding for small elements */
+.mantine-Card-root[data-compact="true"] {
+  padding: 8px !important;
+}
+

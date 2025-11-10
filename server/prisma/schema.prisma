@@ -1,0 +1,247 @@
+// Prisma Schema for Perplexity Automation
+// Database: Supabase PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================================================
+// USER MANAGEMENT
+// ============================================================================
+
+enum UserRole {
+  ADMIN
+  USER
+  VIEWER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+model User {
+  id            String       @id @default(uuid())
+  email         String       @unique
+  password      String
+  firstName     String?
+  lastName      String?
+  role          UserRole     @default(USER)
+  status        UserStatus   @default(ACTIVE)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  lastLoginAt   DateTime?
+  
+  // Relations
+  files         File[]
+  processingJobs ProcessingJob[]
+  apiKeys       ApiKey[]
+  auditLogs     AuditLog[]
+  
+  @@index([email])
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+// ============================================================================
+// API KEY MANAGEMENT
+// ============================================================================
+
+model ApiKey {
+  id          String    @id @default(uuid())
+  key         String    @unique
+  name        String
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt   DateTime?
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  isActive    Boolean   @default(true)
+  
+  @@index([key])
+  @@index([userId])
+  @@map("api_keys")
+}
+
+// ============================================================================
+// FILE MANAGEMENT
+// ============================================================================
+
+enum FileStatus {
+  UPLOADED
+  PROCESSING
+  COMPLETED
+  FAILED
+  ARCHIVED
+}
+
+model File {
+  id              String        @id @default(uuid())
+  originalName    String
+  storagePath     String
+  s3Key           String?
+  fileSize        Int
+  mimeType        String
+  status          FileStatus    @default(UPLOADED)
+  uploadedBy      String
+  user            User          @relation(fields: [uploadedBy], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  // Excel-specific metadata
+  totalRows       Int?
+  reviewRows      Int?
+  processedRows   Int?
+  
+  // Relations
+  processingJobs  ProcessingJob[]
+  
+  @@index([uploadedBy])
+  @@index([status])
+  @@index([createdAt])
+  @@map("files")
+}
+
+// ============================================================================
+// PROCESSING JOBS
+// ============================================================================
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model ProcessingJob {
+  id              String      @id @default(uuid())
+  fileId          String
+  file            File        @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status          JobStatus   @default(PENDING)
+  progress        Float       @default(0)
+  totalRows       Int
+  processedRows   Int         @default(0)
+  failedRows      Int         @default(0)
+  startedAt       DateTime?
+  completedAt     DateTime?
+  errorMessage    String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  
+  // Relations
+  rowResults      RowResult[]
+
+  @@index([fileId])
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("processing_jobs")
+}
+
+// ============================================================================
+// ROW PROCESSING RESULTS
+// ============================================================================
+
+model RowResult {
+  id              String        @id @default(uuid())
+  jobId           String
+  job             ProcessingJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  rowIndex        Int
+  ingredientId    String?
+  ingredientName  String
+  originalStatus  String
+  newStatus       String
+  tags            Json          // Store tags as JSON array
+  aiResponse      String?       // Raw AI response
+  processingTime  Int?          // Time in milliseconds
+  success         Boolean       @default(true)
+  errorMessage    String?
+  createdAt       DateTime      @default(now())
+
+  @@index([jobId])
+  @@index([rowIndex])
+  @@map("row_results")
+}
+
+// ============================================================================
+// AUDIT LOGS
+// ============================================================================
+
+enum AuditAction {
+  USER_LOGIN
+  USER_LOGOUT
+  USER_CREATED
+  USER_UPDATED
+  USER_DELETED
+  FILE_UPLOADED
+  FILE_DELETED
+  JOB_STARTED
+  JOB_COMPLETED
+  JOB_FAILED
+  SETTINGS_UPDATED
+}
+
+model AuditLog {
+  id          String      @id @default(uuid())
+  userId      String?
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action      AuditAction
+  resource    String?     // e.g., "file:123", "job:456"
+  details     Json?       // Additional context
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime    @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================================================
+// SYSTEM SETTINGS
+// ============================================================================
+
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+// ============================================================================
+// WEBHOOK CONFIGURATIONS
+// ============================================================================
+
+enum WebhookEvent {
+  JOB_COMPLETED
+  JOB_FAILED
+  FILE_PROCESSED
+}
+
+model Webhook {
+  id          String        @id @default(uuid())
+  url         String
+  events      WebhookEvent[]
+  secret      String
+  isActive    Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@map("webhooks")
+}
+

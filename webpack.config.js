@@ -8,8 +8,8 @@ module.exports = (env, argv) => {
     entry: {
       background: './src/background.ts',
       content: './src/content.ts',
-      popup: './src/popup.ts',
-      excelPopup: './src/excelPopup.ts'
+      popup: './src/popup.tsx',
+      excelPopup: './src/excelPopup.tsx'
     },
     output: {
       path: path.resolve(__dirname, 'dist'),
@@ -19,14 +19,18 @@ module.exports = (env, argv) => {
     module: {
       rules: [
         {
-          test: /\.ts$/,
+          test: /\.tsx?$/,
           use: 'ts-loader',
           exclude: /node_modules/
+        },
+        {
+          test: /\.css$/,
+          use: ['style-loader', 'css-loader']
         }
       ]
     },
     resolve: {
-      extensions: ['.ts', '.js']
+      extensions: ['.tsx', '.ts', '.js']
     },
     plugins: [
       new CopyPlugin({

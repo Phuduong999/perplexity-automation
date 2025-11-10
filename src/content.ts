@@ -14,7 +14,8 @@ class WorkflowManager {
     timestamp: Date.now()
   };
 
-  private highlightedElements: HTMLElement[] = [];
+  private highlightedElements: WeakMap<Element, () => void> = new WeakMap();
+  private activeElements: Element[] = [];
 
   /**
    * Update workflow state and notify popup
@@ -72,11 +73,8 @@ class WorkflowManager {
     `;
     htmlElement.appendChild(labelDiv);
 
-    // Store for cleanup
-    this.highlightedElements.push(htmlElement);
-
-    // Store cleanup function
-    (htmlElement as any).__cleanup = () => {
+    // Store cleanup function in WeakMap
+    const cleanup = () => {
       htmlElement.style.border = originalBorder;
       htmlElement.style.boxShadow = originalBoxShadow;
       htmlElement.style.position = originalPosition;
@@ -84,18 +82,22 @@ class WorkflowManager {
         labelDiv.remove();
       }
     };
+
+    this.highlightedElements.set(element, cleanup);
+    this.activeElements.push(element);
   }
 
   /**
    * Clear all highlights
    */
   private clearHighlights(): void {
-    this.highlightedElements.forEach(el => {
-      if ((el as any).__cleanup) {
-        (el as any).__cleanup();
+    this.activeElements.forEach(el => {
+      const cleanup = this.highlightedElements.get(el);
+      if (cleanup) {
+        cleanup();
       }
     });
-    this.highlightedElements = [];
+    this.activeElements = [];
   }
 
   /**
@@ -390,21 +392,69 @@ class WorkflowManager {
 
   /**
    * Find and click "New Thread" button to reset conversation
+   * XPath: (//button[@data-testid="sidebar-new-thread"])[1]
+   * CSS Selector: button[data-testid="sidebar-new-thread"]:first-of-type
    */
   private async clickNewThreadButton(): Promise<boolean> {
     Logger.log('=== Clicking New Thread Button ===');
 
-    // Find button by data-testid
-    const button = document.querySelector('button[data-testid="sidebar-new-thread"]') as HTMLElement;
+    // XPath to select FIRST button only: (//button[@data-testid="sidebar-new-thread"])[1]
+    const xpath = '(//button[@data-testid="sidebar-new-thread"])[1]';
+    const button = document.evaluate(
+      xpath,
+      document,
+      null,
+      XPathResult.FIRST_ORDERED_NODE_TYPE,
+      null
+    ).singleNodeValue as HTMLElement;
 
     if (!button) {
-      Logger.error('❌ New Thread button not found');
+      Logger.error('❌ No New Thread button found with XPath:', xpath);
+
+      // Debug: Log all buttons to see what's available
+      const allButtons = document.querySelectorAll('button[data-testid="sidebar-new-thread"]');
+      Logger.log(`Found ${allButtons.length} buttons with data-testid="sidebar-new-thread"`);
+      allButtons.forEach((btn, idx) => {
+        Logger.log(`Button ${idx}:`, {
+          visible: !!(btn as HTMLElement).offsetParent,
+          disabled: btn.hasAttribute('disabled'),
+          html: btn.outerHTML.substring(0, 150)
+        });
+      });
+
       return false;
     }
 
-    Logger.log('✅ Found New Thread button');
+    Logger.log('✅ Found first New Thread button via XPath');
+    Logger.log('Button details:', {
+      visible: !!button.offsetParent,
+      disabled: button.hasAttribute('disabled'),
+      ariaLabel: button.getAttribute('aria-label'),
+      html: button.outerHTML.substring(0, 200)
+    });
 
+    // Validate button is visible and clickable
+    if (!button.offsetParent) {
+      Logger.error('❌ First button exists but is NOT visible (display:none or hidden)');
+      return false;
+    }
+
+    if (button.hasAttribute('disabled')) {
+      Logger.error('❌ First button is disabled');
+      return false;
+    }
+
+    Logger.log('✅ Using first New Thread button (index 0) - XPath:', xpath);
+    return this.clickButton(button);
+  }
+
+  /**
+   * Helper method to click a button
+   */
+  private async clickButton(button: HTMLElement): Promise<boolean> {
     try {
+      Logger.log('Button HTML:', button.outerHTML.substring(0, 200));
+
       // Scroll into view
       button.scrollIntoView({ behavior: 'instant', block: 'center' });
       await sleep(100);
@@ -414,7 +464,7 @@ class WorkflowManager {
       await sleep(50);
 
       button.click();
-      Logger.log('✅ New Thread button clicked');
+      Logger.log('✅ Button clicked');
 
       // Also dispatch mouse events
       button.dispatchEvent(new MouseEvent('mousedown', {
@@ -437,7 +487,7 @@ class WorkflowManager {
 
       return true;
     } catch (error) {
-      Logger.error('❌ Error clicking New Thread button:', error);
+      Logger.error('❌ Error clicking button:', error);
       return false;
     }
   }
@@ -471,21 +521,27 @@ class WorkflowManager {
   /**
    * Wait for AI to finish thinking
    * Strategy: Monitor "Stop Generating" button state
-   * NO TIMEOUT - wait indefinitely until AI finishes
+   * Maximum timeout: 30 minutes
    */
-  private async waitForThinkingComplete(_timeoutMs?: number): Promise<boolean> {
+  private async waitForThinkingComplete(timeoutMs: number = 1800000): Promise<boolean> {
     this.updateState('wait_thinking', StepStatus.IN_PROGRESS);
-    Logger.log('=== Waiting for AI to finish thinking (NO TIMEOUT) ===');
+    Logger.log(`=== Waiting for AI to finish thinking (max ${timeoutMs/1000}s) ===`);
 
     const startTime = Date.now();
     const checkInterval = 500; // Check every 500ms
     let wasThinking = false;
     let checkCount = 0;
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) { // NO TIMEOUT - wait forever
+    while (true) {
       checkCount++;
       const elapsed = Math.round((Date.now() - startTime) / 1000);
+
+      // TIMEOUT CHECK
+      if (Date.now() - startTime >= timeoutMs) {
+        Logger.error(`⏰ Timeout after ${elapsed}s - AI did not respond`);
+        this.updateState('wait_thinking', StepStatus.FAILED, 'Timeout');
+        return false;
+      }
 
       // Check "Stop Generating" button
       const { isThinking } = this.findStopButton();
@@ -493,7 +549,7 @@ class WorkflowManager {
       if (isThinking) {
         wasThinking = true;
         if (checkCount % 4 === 0) { // Log every 2 seconds
-          Logger.log(`⏳ AI is thinking... (${elapsed}s)`);
+          Logger.log(`⏳ AI is thinking... (${elapsed}s / ${timeoutMs/1000}s)`);
         }
         await sleep(checkInterval);
         continue;
@@ -788,10 +844,19 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
           const result = workflowManager['findCodeBlockContent'](index);
 
+          // ✅ FIX: Provide more detailed response
           sendResponse({
             success: result.found,
-            content: result.cleanText || null,
-            rawText: result.rawText || null
+            content: result.hasCode ? result.cleanText : null,
+            rawText: result.found ? (result.rawText || 'No content') : null,
+            hasCode: result.hasCode || false,
+            markdownExists: result.found,
+            details: {
+              id: result.id,
+              found: result.found,
+              hasCode: result.hasCode || false,
+              contentLength: result.cleanText ? result.cleanText.length : 0
+            }
           });
           break;
         }
@@ -799,6 +864,13 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
         case MessageType.NEW_THREAD: {
           Logger.log('Creating new thread');
           const success = await workflowManager['clickNewThreadButton']();
+
+          if (success) {
+            Logger.log('⏳ Waiting 5 seconds for new thread content to load...');
+            await sleep(5000);
+            Logger.log('✅ New thread content loaded, ready for prompt initialization');
+          }
+
           sendResponse({ success });
           break;
         }
@@ -806,6 +878,19 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
         case 'PING': {
           // Health check from background script
           sendResponse({ success: true, status: 'alive' });
+          break;
+        }
+
+        case 'VERIFY_INPUT': {
+          // Verify ask-input element exists
+          const input = document.querySelector('#ask-input');
+          const exists = input !== null;
+          Logger.log(`VERIFY_INPUT: ask-input ${exists ? 'EXISTS' : 'NOT FOUND'}`);
+          sendResponse({
+            success: exists,
+            found: exists,
+            message: exists ? 'ask-input element found' : 'ask-input element not found'
+          });
           break;
         }
 
@@ -827,4 +912,9 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 });
 
 Logger.log('Content script initialized on:', window.location.href);
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+  workflowManager['clearHighlights']();
+});
 
