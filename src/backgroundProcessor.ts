@@ -421,8 +421,48 @@ class BackgroundProcessor {
           throw new Error(response.error || 'Failed to get AI response');
         }
 
-        // Wait for AI to process (5 seconds)
+        // Wait for AI to process (5 seconds initial wait)
         await this.sleep(5000);
+
+        // ✅ NEW: Wait for thinking mode to complete with 1 minute timeout
+        this.addLog('Checking if AI is in thinking mode...', 'info');
+        const thinkingStartTime = Date.now();
+        const THINKING_TIMEOUT = 60000; // 1 minute
+
+        while (true) {
+          const thinkingElapsed = Date.now() - thinkingStartTime;
+
+          // Check if thinking mode timeout exceeded
+          if (thinkingElapsed > THINKING_TIMEOUT) {
+            this.addLog(`⏰ Thinking mode timeout (${Math.round(thinkingElapsed/1000)}s > 60s) - creating new thread`, 'warning');
+            await this.createNewThread();
+
+            // ✅ rowsInCurrentThread already set to -1 by createNewThread() (init already sent)
+            this.addLog('New thread created due to thinking timeout, will retry row', 'info');
+
+            throw new Error('Thinking mode timeout - created new thread, will retry row in new thread');
+          }
+
+          // Check if AI is still thinking
+          const thinkingResponse = await chrome.tabs.sendMessage(this.state.perplexityTabId, {
+            type: 'CHECK_THINKING'
+          });
+
+          if (thinkingResponse && thinkingResponse.isThinking) {
+            const elapsed = Math.round(thinkingElapsed / 1000);
+            if (elapsed % 10 === 0) { // Log every 10 seconds
+              this.addLog(`⏳ AI is thinking... (${elapsed}s / 60s)`, 'info');
+            }
+            await this.sleep(2000); // Check every 2 seconds
+            continue;
+          }
+
+          // AI finished thinking or never started
+          if (thinkingElapsed > 0) {
+            this.addLog(`✅ AI finished thinking (${Math.round(thinkingElapsed/1000)}s)`, 'success');
+          }
+          break;
+        }
 
         // ✅ FIX: Fetch using CURRENT counter (starts at 0), then increment AFTER
         this.addLog(`Fetching markdown-content-${thread.markdownCounter}`, 'info');

@@ -875,6 +875,17 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
           break;
         }
 
+        case 'CHECK_THINKING': {
+          // Check if AI is in thinking mode
+          const { isThinking } = workflowManager['findStopButton']();
+          Logger.log(`CHECK_THINKING: ${isThinking ? 'THINKING' : 'IDLE'}`);
+          sendResponse({
+            success: true,
+            isThinking: isThinking
+          });
+          break;
+        }
+
         case 'PING': {
           // Health check from background script
           sendResponse({ success: true, status: 'alive' });
