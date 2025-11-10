@@ -22,6 +22,7 @@ export interface ProcessingThread {
   error?: string;
   markdownCounter: number; // Track markdown-content-{N} index
   rowsInCurrentThread: number; // Track rows processed in current Perplexity thread
+  consecutiveFailedThreads: number; // Track consecutive new threads without successful results
 }
 
 export interface ProcessingState {
@@ -132,7 +133,8 @@ class BackgroundProcessor {
       startTime: Date.now(),
       lastUpdateTime: Date.now(),
       markdownCounter: 0,
-      rowsInCurrentThread: 0
+      rowsInCurrentThread: 0,
+      consecutiveFailedThreads: 0
     };
 
     this.state.threads.push(thread);
@@ -311,6 +313,9 @@ class BackgroundProcessor {
         thread.rowsInCurrentThread++;
       }
 
+      // ✅ Reset consecutive failed threads counter on successful result
+      thread.consecutiveFailedThreads = 0;
+
       thread.lastUpdateTime = Date.now();
 
       this.addLog(`✅ Processed row ${thread.currentRowIndex}/${thread.totalRows}`, 'success');
@@ -329,8 +334,26 @@ class BackgroundProcessor {
 
       // ✅ FIX: Check if error is due to emergency new thread creation
       if (errorMsg.includes('created new thread')) {
+        // Increment consecutive failed threads counter
+        thread.consecutiveFailedThreads++;
+        this.addLog(`🔄 Will retry current row in new thread (consecutive failures: ${thread.consecutiveFailedThreads}/5)`, 'warning');
+
+        // ✅ Check if too many consecutive failed threads
+        if (thread.consecutiveFailedThreads >= 5) {
+          thread.status = 'error';
+          thread.error = `Stopped after 5 consecutive new threads without successful results. Processed: ${thread.processedRows}/${thread.totalRows} rows (${thread.processedRows} OK).`;
+
+          this.addLog(`🛑 STOPPED: 5 consecutive new threads failed`, 'error');
+          this.addLog(`� Results: ${thread.processedRows} rows processed successfully out of ${thread.totalRows} total`, 'info');
+          this.addLog(`✅ Total OK: ${thread.processedRows}`, 'success');
+
+          this.state.isProcessing = false;
+          await this.saveState();
+          this.notifyPopup({ type: 'STATE_UPDATE', state: this.state });
+          return; // Stop processing
+        }
+
         // Don't count as failed, don't move to next row - will retry current row in new thread
-        this.addLog(`🔄 Will retry current row in new thread`, 'info');
       } else {
         // Regular error - count as failed and move to next row
         thread.failedRows++;
@@ -476,19 +499,19 @@ class BackgroundProcessor {
         // Increment counter AFTER successful fetch for next iteration
         thread.markdownCounter++;
 
-        if (!markdownResponse.success) {
-          throw new Error('Failed to get markdown content');
-        }
+        // ✅ FIX: If failed to get markdown OR no code block → create new thread immediately
+        if (!markdownResponse.success || !markdownResponse.hasCode) {
+          const reason = !markdownResponse.success
+            ? 'Failed to get markdown content (timeout or not found)'
+            : 'AI response has NO code block';
 
-        // ✅ FIX: Check if markdown has code block - create new thread immediately to prevent context pollution
-        if (!markdownResponse.hasCode) {
-          this.addLog('⚠️ AI response has NO code block - triggering EMERGENCY NEW THREAD', 'warning');
+          this.addLog(`⚠️ ${reason} - triggering EMERGENCY NEW THREAD`, 'warning');
           await this.createNewThread();
 
           // ✅ rowsInCurrentThread already set to -1 by createNewThread() (init already sent)
           this.addLog('Emergency new thread created, rowsInCurrentThread set to -1 (init already sent)', 'info');
 
-          throw new Error('No code block in AI response - created new thread, will retry row in new thread');
+          throw new Error(`${reason} - created new thread, will retry row in new thread`);
         }
 
         const content = markdownResponse.content;
@@ -510,12 +533,22 @@ class BackgroundProcessor {
         const errorMsg = error instanceof Error ? error.message : String(error);
         this.addLog(`❌ Attempt ${attempt} failed: ${errorMsg}`, 'warning');
 
+        // ✅ NEW: If error is "created new thread", propagate immediately (don't retry)
+        if (errorMsg.includes('created new thread')) {
+          throw error;
+        }
+
         if (attempt < maxRetries) {
           const waitTime = 2000 * attempt; // Exponential backoff: 2s, 4s, 6s
           this.addLog(`Waiting ${waitTime}ms before retry...`, 'info');
           await this.sleep(waitTime);
         } else {
-          throw new Error(`Failed after ${maxRetries} attempts: ${errorMsg}`);
+          // ✅ NEW: After all retries failed, create new thread and retry
+          this.addLog(`⚠️ All ${maxRetries} attempts failed - creating new thread to recover`, 'warning');
+          await this.createNewThread();
+
+          this.addLog('New thread created after repeated failures, will retry row', 'info');
+          throw new Error('All attempts failed - created new thread, will retry row in new thread');
         }
       }
     }
