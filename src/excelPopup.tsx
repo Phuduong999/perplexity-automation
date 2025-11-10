@@ -129,6 +129,24 @@ const App: React.FC = () => {
             }));
           }
         }
+      } else if (message.type === 'DOWNLOAD_EXCEL') {
+        // ✅ Handle download request from background with folder support
+        const { buffer, fileName, partNumber } = message.payload;
+        const uint8Array = new Uint8Array(buffer);
+        const blob = new Blob([uint8Array], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = URL.createObjectURL(blob);
+
+        // Determine folder based on processing status
+        const folder = 'processed_files'; // Default folder for all processed files
+
+        const a = document.createElement('a');
+        a.href = url;
+        // Chrome will auto-create folder if it doesn't exist
+        a.download = `${folder}/${fileName}`;
+        a.click();
+
+        URL.revokeObjectURL(url);
+        addLog(`📥 Downloaded: ${folder}/${fileName}`, 'success');
       }
     };
 
@@ -339,34 +357,82 @@ const App: React.FC = () => {
     await chrome.runtime.sendMessage({ type: 'STOP_PROCESSING' });
   };
 
-  const handleDownload = async () => {
-    addLog('Preparing download...', 'info');
-    
+  const handleDownloadCurrent = async () => {
+    addLog('📥 Downloading current processed file...', 'info');
+
     try {
-      const result = await chrome.storage.local.get([STORAGE_KEYS.SELECTED_FILES]);
-      const files = result[STORAGE_KEYS.SELECTED_FILES] || [];
+      // Request download from background processor
+      const response = await chrome.runtime.sendMessage({ type: 'DOWNLOAD_CURRENT' });
 
-      for (const file of files) {
-        const workflow = new ExcelWorkflowManager(file.filePath);
-        const response = await fetch(chrome.runtime.getURL(file.filePath));
-        const arrayBuffer = await response.arrayBuffer();
-        workflow.parseExcelFromBuffer(arrayBuffer);
-
-        const outputBuffer = workflow.saveExcelFile();
-        const blob = new Blob([outputBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        const url = URL.createObjectURL(blob);
-        const outputFileName = file.fileName.replace('.xlsx', EXCEL_CONFIG.OUTPUT_SUFFIX);
-
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = outputFileName;
-        a.click();
-        URL.revokeObjectURL(url);
-
-        addLog(`Downloaded: ${outputFileName}`, 'success');
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to download');
       }
+
+      // Download will be triggered by background via DOWNLOAD_EXCEL message
     } catch (error) {
-      addLog(`Download error: ${error}`, 'error');
+      addLog(`❌ Download error: ${error}`, 'error');
+    }
+  };
+
+  const handleDownload = async () => {
+    addLog('📦 Downloading all processed files...', 'info');
+
+    try {
+      // Get processing state to find all threads
+      const result = await chrome.storage.local.get(['processingState']);
+      const processingState = result.processingState;
+
+      if (!processingState || !processingState.threads || processingState.threads.length === 0) {
+        addLog('⚠️ No processed files found', 'warning');
+        return;
+      }
+
+      const folder = 'processed_files';
+      let downloadedCount = 0;
+
+      // Download each thread's processed file
+      for (const thread of processingState.threads) {
+        try {
+          // Get Excel buffer from storage
+          const storageKey = `excel_buffer_${thread.id}`;
+          const bufferResult = await chrome.storage.local.get([storageKey]);
+
+          if (!bufferResult[storageKey]) {
+            addLog(`⚠️ Skipping ${thread.fileName} - no processed data found`, 'warning');
+            continue;
+          }
+
+          // Convert buffer array to Uint8Array
+          const bufferArray = bufferResult[storageKey];
+          const uint8Array = new Uint8Array(bufferArray);
+          const blob = new Blob([uint8Array], {
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          });
+          const url = URL.createObjectURL(blob);
+
+          const fileName = thread.fileName.replace('.xlsx', '_PROCESSED.xlsx');
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${folder}/${fileName}`;
+          a.click();
+
+          URL.revokeObjectURL(url);
+          downloadedCount++;
+
+          addLog(`✅ Downloaded: ${folder}/${fileName} (${thread.processedRows}/${thread.totalRows} rows)`, 'success');
+
+          // Small delay between downloads
+          await new Promise(resolve => setTimeout(resolve, 300));
+
+        } catch (error) {
+          addLog(`❌ Failed to download ${thread.fileName}: ${error}`, 'error');
+        }
+      }
+
+      addLog(`🎉 Downloaded ${downloadedCount} processed file(s) to ${folder}/`, 'success');
+
+    } catch (error) {
+      addLog(`❌ Download error: ${error}`, 'error');
     }
   };
 
@@ -519,16 +585,28 @@ const App: React.FC = () => {
             )}
           </Group>
 
-          <Button
-            onClick={handleDownload}
-            variant="filled"
-            color="green"
-            radius="lg"
-            fullWidth
-            size="sm"
-          >
-            Download All Updated Files
-          </Button>
+          <Group grow>
+            <Button
+              onClick={handleDownloadCurrent}
+              variant="light"
+              color="green"
+              radius="lg"
+              size="sm"
+              disabled={state.processedCount === 0}
+            >
+              📥 Download Current
+            </Button>
+
+            <Button
+              onClick={handleDownload}
+              variant="filled"
+              color="green"
+              radius="lg"
+              size="sm"
+            >
+              📦 Save All to Folder
+            </Button>
+          </Group>
 
           <Accordion variant="contained" radius="lg">
             <Accordion.Item value="logs">

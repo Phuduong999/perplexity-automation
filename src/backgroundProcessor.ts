@@ -11,6 +11,7 @@ export interface ProcessingThread {
   id: string;
   partNumber: number;
   fileName: string;
+  filePath: string; // Store file path for restoring workflow
   status: 'idle' | 'running' | 'paused' | 'completed' | 'error';
   currentRowIndex: number;
   totalRows: number;
@@ -92,14 +93,14 @@ class BackgroundProcessor {
       type,
       timestamp: Date.now()
     };
-    
+
     this.state.logs.push(log);
-    
+
     // Keep only last 100 logs
     if (this.state.logs.length > 100) {
       this.state.logs = this.state.logs.slice(-100);
     }
-    
+
     this.saveState();
     this.notifyPopup({ type: 'LOG_ADDED', log });
   }
@@ -122,6 +123,7 @@ class BackgroundProcessor {
       id: threadId,
       partNumber,
       fileName,
+      filePath, // Store file path for later restoration
       status: 'idle',
       currentRowIndex: 0,
       totalRows: 0,
@@ -163,6 +165,12 @@ class BackgroundProcessor {
       // Store review rows in chrome.storage for processing
       await chrome.storage.local.set({
         [STORAGE_KEYS.REVIEW_ROWS]: reviewRows
+      });
+
+      // Store Excel buffer for later download restoration
+      const storageKey = `excel_buffer_${threadId}`;
+      await chrome.storage.local.set({
+        [storageKey]: Array.from(new Uint8Array(arrayBuffer))
       });
 
       this.workflowManagers.set(threadId, workflow);
@@ -242,6 +250,10 @@ class BackgroundProcessor {
       // Thread complete
       thread.status = 'completed';
       this.addLog(`Thread ${thread.id} completed`, 'success');
+
+      // ✅ Auto-download Excel file
+      await this.downloadExcelFile(thread);
+
       this.stopProcessing();
       await this.saveState();
       return;
@@ -254,13 +266,14 @@ class BackgroundProcessor {
 
     try {
       // 1. Format prompt
-      // First row in thread: send full prompt + ingredient name
+      // First row in VERY FIRST thread (rowsInCurrentThread === 0): send full prompt + ingredient name
+      // After createNewThread (rowsInCurrentThread === -1): just ingredient name (init already sent)
       // Other rows: just ingredient name
       const isFirstRowInThread = thread.rowsInCurrentThread === 0;
       const prompt = workflow.formatInput(row, isFirstRowInThread);
 
       if (isFirstRowInThread) {
-        this.addLog('Sending full prompt (first row in thread)', 'info');
+        this.addLog('Sending full prompt (first row in very first thread)', 'info');
       } else {
         this.addLog('Sending ingredient name only', 'info');
       }
@@ -279,10 +292,25 @@ class BackgroundProcessor {
       workflow.writeTagsToRow(row.rowIndex, mappedColumns);
       workflow.updateRowStatus(row.rowIndex, EXCEL_CONFIG.STATUS.OK);
 
+      // 5.1. Save updated Excel buffer to storage for download restoration
+      const updatedBuffer = workflow.saveExcelFile();
+      const storageKey = `excel_buffer_${thread.id}`;
+      await chrome.storage.local.set({
+        [storageKey]: Array.from(new Uint8Array(updatedBuffer))
+      });
+
       // 6. Update thread state
       thread.processedRows++;
       thread.currentRowIndex++;
-      thread.rowsInCurrentThread++;
+
+      // ✅ FIX: If rowsInCurrentThread is -1 (after createNewThread), set to 1 instead of incrementing
+      // This ensures next row won't be treated as "first row"
+      if (thread.rowsInCurrentThread === -1) {
+        thread.rowsInCurrentThread = 1;
+      } else {
+        thread.rowsInCurrentThread++;
+      }
+
       thread.lastUpdateTime = Date.now();
 
       this.addLog(`✅ Processed row ${thread.currentRowIndex}/${thread.totalRows}`, 'success');
@@ -292,17 +320,23 @@ class BackgroundProcessor {
         this.addLog(`Creating new thread after ${this.state.rowsPerThread} rows`, 'info');
         await this.createNewThread();
 
-        // ✅ FIX: Only reset rowsInCurrentThread, markdownCounter already set to 1 by createNewThread()
-        thread.rowsInCurrentThread = 0;
-        this.addLog('rowsInCurrentThread reset for new thread', 'info');
+        // ✅ rowsInCurrentThread already set to -1 by createNewThread()
+        this.addLog('New thread created, rowsInCurrentThread set to -1 (init already sent)', 'info');
       }
 
     } catch (error) {
-      thread.failedRows++;
-      this.addLog(`❌ Failed to process row ${thread.currentRowIndex}: ${error}`, 'error');
+      const errorMsg = error instanceof Error ? error.message : String(error);
 
-      // Move to next row even on failure
-      thread.currentRowIndex++;
+      // ✅ FIX: Check if error is due to emergency new thread creation
+      if (errorMsg.includes('created new thread')) {
+        // Don't count as failed, don't move to next row - will retry current row in new thread
+        this.addLog(`🔄 Will retry current row in new thread`, 'info');
+      } else {
+        // Regular error - count as failed and move to next row
+        thread.failedRows++;
+        this.addLog(`❌ Failed to process row ${thread.currentRowIndex}: ${errorMsg}`, 'error');
+        thread.currentRowIndex++;
+      }
     } finally {
       this.isProcessingRow = false;
     }
@@ -406,16 +440,15 @@ class BackgroundProcessor {
           throw new Error('Failed to get markdown content');
         }
 
-        // ✅ FIX: Check if markdown has code block
+        // ✅ FIX: Check if markdown has code block - create new thread immediately to prevent context pollution
         if (!markdownResponse.hasCode) {
-          this.addLog('⚠️ AI response has NO code block - triggering NEW THREAD', 'warning');
+          this.addLog('⚠️ AI response has NO code block - triggering EMERGENCY NEW THREAD', 'warning');
           await this.createNewThread();
 
-          // ✅ FIX: Only reset rowsInCurrentThread, markdownCounter already set to 1 by createNewThread()
-          thread.rowsInCurrentThread = 0;
-          this.addLog('rowsInCurrentThread reset after emergency new thread', 'info');
+          // ✅ rowsInCurrentThread already set to -1 by createNewThread() (init already sent)
+          this.addLog('Emergency new thread created, rowsInCurrentThread set to -1 (init already sent)', 'info');
 
-          throw new Error('No code block in AI response - created new thread, retry needed');
+          throw new Error('No code block in AI response - created new thread, will retry row in new thread');
         }
 
         const content = markdownResponse.content;
@@ -501,12 +534,76 @@ class BackgroundProcessor {
 
         // ✅ FIX: Increment counter to 1 to skip markdown-content-0 (initial prompt response)
         thread.markdownCounter = 1;
-        this.addLog('✅ Initial prompt sent, new thread ready (counter set to 1 to skip markdown-0)', 'success');
+
+        // ✅ FIX: Set rowsInCurrentThread to -1 so next row will be treated as "already initialized"
+        // This prevents sending full prompt again (init already sent above)
+        thread.rowsInCurrentThread = -1;
+
+        this.addLog('✅ Initial prompt sent, new thread ready (counter=1, rowsInCurrentThread=-1)', 'success');
       }
     }
   }
 
   private lastRequestTime: number = 0;
+
+  /**
+   * Public method to download Excel file (called from background.ts)
+   */
+  async downloadExcelFile(thread: ProcessingThread): Promise<void> {
+    try {
+      let workflow = this.workflowManagers.get(thread.id);
+
+      // If workflow not in memory, try to restore from storage
+      if (!workflow) {
+        this.addLog('⚠️ Workflow not in memory, restoring from storage...', 'warning');
+
+        try {
+          // Get stored Excel buffer
+          const storageKey = `excel_buffer_${thread.id}`;
+          const result = await chrome.storage.local.get([storageKey]);
+
+          if (!result[storageKey]) {
+            throw new Error('Excel buffer not found in storage. Please re-process the file.');
+          }
+
+          // Restore workflow from buffer
+          workflow = new ExcelWorkflowManager(thread.filePath);
+          await workflow.loadPrompt();
+
+          const bufferArray = result[storageKey];
+          const buffer = new Uint8Array(bufferArray).buffer;
+          workflow.parseExcelFromBuffer(buffer);
+
+          // Store back in memory
+          this.workflowManagers.set(thread.id, workflow);
+          this.addLog('✅ Workflow restored from storage', 'success');
+        } catch (restoreError) {
+          this.addLog(`❌ Failed to restore workflow: ${restoreError}`, 'error');
+          throw new Error('Workflow manager not found and could not be restored. Please re-process the file.');
+        }
+      }
+
+      this.addLog('📥 Preparing download...', 'info');
+
+      // Get Excel buffer
+      const buffer = workflow.saveExcelFile();
+
+      // Send to popup for download (background can't create <a> element)
+      this.notifyPopup({
+        type: 'DOWNLOAD_EXCEL',
+        payload: {
+          buffer: Array.from(new Uint8Array(buffer)), // Convert to array for message passing
+          fileName: thread.fileName.replace('.xlsx', '_PROCESSED.xlsx'),
+          partNumber: thread.partNumber
+        }
+      });
+
+      this.addLog(`✅ Download triggered: ${thread.fileName.replace('.xlsx', '_PROCESSED.xlsx')}`, 'success');
+    } catch (error) {
+      this.addLog(`❌ Download failed: ${error}`, 'error');
+      throw error;
+    }
+  }
 }
 
 // Create singleton instance

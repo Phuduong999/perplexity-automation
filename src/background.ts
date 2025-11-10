@@ -327,6 +327,31 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
           break;
         }
 
+        case MessageType.DOWNLOAD_CURRENT: {
+          BackgroundLogger.log('Handling DOWNLOAD_CURRENT request');
+          try {
+            const state = backgroundProcessor.getState();
+            if (!state.currentThread) {
+              throw new Error('No active thread');
+            }
+
+            const thread = state.threads.find(t => t.id === state.currentThread);
+            if (!thread) {
+              throw new Error('Thread not found');
+            }
+
+            await backgroundProcessor.downloadExcelFile(thread);
+            sendResponse({ success: true });
+          } catch (error) {
+            BackgroundLogger.error('Failed to download:', error);
+            sendResponse({
+              success: false,
+              error: error instanceof Error ? error.message : String(error)
+            });
+          }
+          break;
+        }
+
         default:
           BackgroundLogger.warn('Unknown message type:', message.type);
           sendResponse({ success: false, error: 'Unknown message type' });
